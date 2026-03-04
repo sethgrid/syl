@@ -1,0 +1,30 @@
+name: Tag
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  tag:
+    name: Create version tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read VERSION
+        id: version
+        run: echo "TAG=v$(cat VERSION)" >> $GITHUB_OUTPUT
+
+      - name: Create and push tag
+        run: |
+          TAG="${{ steps.version.outputs.TAG }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists, skipping."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi
