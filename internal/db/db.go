@@ -23,7 +23,7 @@ func Open(path string) (*sql.DB, error) {
 	db.SetMaxIdleConns(1)
 
 	if err := migrate(db); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	return db, nil
