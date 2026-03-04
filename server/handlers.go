@@ -21,11 +21,37 @@ import (
 	"github.com/sethgrid/syl/internal/skills"
 	"github.com/sethgrid/syl/internal/sse"
 	"github.com/sethgrid/syl/logger"
+	"github.com/sethgrid/syl/web"
 )
 
 func handleIndex() http.HandlerFunc {
+	data, err := web.FS.ReadFile("index.html")
+	if err != nil {
+		panic("web/index.html missing from embed: " + err.Error())
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "web/index.html")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(data)
+	}
+}
+
+func handleSession(agents agent.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		fp := r.URL.Query().Get("fingerprint")
+		if fp == "" {
+			http.Error(w, "fingerprint required", http.StatusBadRequest)
+			return
+		}
+		ag, err := agents.Resolve(r.URL.Query().Get("name"), fp)
+		if err != nil {
+			logger.FromRequest(r).Error("resolve agent", "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]int64{"agent_id": ag.ID}); err != nil {
+			logger.FromRequest(r).Error("encode session", "error", err)
+		}
 	}
 }
 
