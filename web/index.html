@@ -11,21 +11,24 @@
     .msg { max-width: 70%; padding: 0.6rem 1rem; border-radius: 1rem; line-height: 1.5; }
     .msg.user { background: #1e3a5f; align-self: flex-end; border-bottom-right-radius: 0.25rem; }
     .msg.assistant { background: #1a1a1a; align-self: flex-start; border-bottom-left-radius: 0.25rem; }
+    #status { font-size: 0.75rem; color: #555; text-align: center; padding: 0.25rem; }
     #input-row { display: flex; gap: 0.5rem; padding: 1rem 1.5rem; border-top: 1px solid #222; background: #0f0f0f; }
     #text-input { flex: 1; background: #1a1a1a; border: 1px solid #333; border-radius: 0.5rem; color: #e0e0e0; padding: 0.6rem 1rem; font-size: 1rem; }
     #send-btn { background: #1e3a5f; border: none; color: #e0e0e0; padding: 0.6rem 1.2rem; border-radius: 0.5rem; cursor: pointer; font-size: 1rem; }
     #send-btn:hover { background: #2a4f7a; }
+    #send-btn:disabled { opacity: 0.4; cursor: default; }
   </style>
 </head>
 <body>
   <div id="chat"></div>
+  <div id="status">connecting…</div>
   <div id="input-row">
-    <input id="text-input" type="text" placeholder="Message Syl…" autofocus>
-    <button id="send-btn">Send</button>
+    <input id="text-input" type="text" placeholder="Message Syl…" autofocus disabled>
+    <button id="send-btn" disabled>Send</button>
   </div>
 
   <script>
-    // Fingerprint: persistent per-browser identity
+    // Persistent per-browser identity.
     let fingerprint = localStorage.getItem('syl_fp');
     if (!fingerprint) {
       fingerprint = crypto.randomUUID();
@@ -35,6 +38,18 @@
     let agentID = null;
     let currentMsg = null;
     let eventSource = null;
+
+    const statusEl = document.getElementById('status');
+    const inputEl  = document.getElementById('text-input');
+    const sendBtn  = document.getElementById('send-btn');
+
+    function setStatus(text) { statusEl.textContent = text; }
+
+    function enable() {
+      inputEl.disabled = false;
+      sendBtn.disabled = false;
+      inputEl.focus();
+    }
 
     function appendMsg(role, text) {
       const el = document.createElement('div');
@@ -48,6 +63,18 @@
     function connectSSE(aid) {
       if (eventSource) eventSource.close();
       eventSource = new EventSource('/sse?agent_id=' + aid);
+
+      eventSource.onopen = () => {
+        setStatus('connected');
+        enable();
+      };
+
+      eventSource.onerror = () => {
+        setStatus('reconnecting…');
+        inputEl.disabled = true;
+        sendBtn.disabled = true;
+      };
+
       eventSource.onmessage = (e) => {
         const evt = JSON.parse(e.data);
         if (evt.type === 'token') {
@@ -57,17 +84,28 @@
         } else if (evt.type === 'done') {
           currentMsg = null;
         } else if (evt.type === 'error') {
-          appendMsg('assistant', '⚠ ' + evt.content);
+          appendMsg('assistant', '[error] ' + evt.content);
           currentMsg = null;
         }
       };
     }
 
+    async function init() {
+      try {
+        const res = await fetch('/session?fingerprint=' + encodeURIComponent(fingerprint));
+        if (!res.ok) throw new Error('session ' + res.status);
+        const data = await res.json();
+        agentID = data.agent_id;
+        connectSSE(agentID);
+      } catch (err) {
+        setStatus('error: ' + err.message);
+      }
+    }
+
     async function send() {
-      const input = document.getElementById('text-input');
-      const text = input.value.trim();
-      if (!text) return;
-      input.value = '';
+      const text = inputEl.value.trim();
+      if (!text || !agentID) return;
+      inputEl.value = '';
       appendMsg('user', text);
 
       const res = await fetch('/message', {
@@ -75,23 +113,17 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, fingerprint }),
       });
-
-      // On first message, resolve agentID from response header or reconnect SSE
-      if (!agentID) {
-        const aid = res.headers.get('X-Agent-Id');
-        if (aid) {
-          agentID = parseInt(aid);
-          connectSSE(agentID);
-        }
+      if (!res.ok) {
+        appendMsg('assistant', '[error] message failed (' + res.status + ')');
       }
     }
 
-    document.getElementById('send-btn').addEventListener('click', send);
-    document.getElementById('text-input').addEventListener('keydown', (e) => {
+    sendBtn.addEventListener('click', send);
+    inputEl.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
     });
 
-    // TODO: resolve agentID on page load and connect SSE
+    init();
   </script>
 </body>
 </html>

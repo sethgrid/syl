@@ -121,6 +121,7 @@ func (s *Server) Serve() error {
 	withTimeout := middleware.Timeout(s.config.RequestTimeout)
 
 	router.With(withTimeout).Get("/", handleIndex())
+	router.With(withTimeout).Get("/session", handleSession(s.agents))
 	// SSE must NOT have a request timeout
 	router.Get("/sse", handleSSE(s.broker))
 	router.With(withTimeout).Post("/message", handleMessage(
