@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,8 +24,7 @@ func Open(path string) (*sql.DB, error) {
 	db.SetMaxIdleConns(1)
 
 	if err := migrate(db); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("migrate: %w", err)
+		return nil, fmt.Errorf("migrate: %w", errors.Join(err, db.Close()))
 	}
 	return db, nil
 }
