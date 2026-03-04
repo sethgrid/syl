@@ -1,0 +1,25 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck       # unchecked errors
+    - govet          # go vet passes
+    - ineffassign    # assignments with no effect
+    - misspell       # common spelling mistakes
+    - staticcheck    # broad static analysis (includes SA*, S*, ST*)
+    - unused         # unused code
+
+linters-settings:
+  misspell:
+    locale: US
+
+issues:
+  max-same-issues: 0
+  exclude-rules:
+    # Allow unused parameters in test helpers and fake implementations.
+    - path: "_test\\.go|fake\\.go"
+      linters: [unused]
+    # Allow unchecked errors on SSE writes (client disconnect is expected).
+    - path: "internal/sse/"
+      linters: [errcheck]
