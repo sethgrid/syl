@@ -5,6 +5,7 @@ inbox/
 *.db-shm
 bin/
 .claude/
-
-# Dolt database files (added by bd init)
+.beads/
 .dolt/
+.sqlhistory
+config.yaml
