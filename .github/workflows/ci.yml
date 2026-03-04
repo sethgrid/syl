@@ -109,7 +109,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [test, build]
     # Only runs if a docker-compose.yaml exists in the repo
-    if: hashFiles('docker-compose.yaml') != ''
+    if: ${{ hashFiles('docker-compose.yaml') != '' }}
     steps:
       - uses: actions/checkout@v4
 
