@@ -77,10 +77,10 @@ func TestSSESurvivesRequestTimeout(t *testing.T) {
 	// Wait past the request timeout to confirm connection is still open.
 	time.Sleep(300 * time.Millisecond) // 2× the timeout
 
-	// Connection should still be alive (context not cancelled by server).
+	// Connection should still be alive (context not canceled by server).
 	select {
 	case <-ctx.Done():
-		t.Fatal("SSE context cancelled unexpectedly — server likely killed the connection")
+		t.Fatal("SSE context canceled unexpectedly — server likely killed the connection")
 	default:
 		// still open: pass
 	}

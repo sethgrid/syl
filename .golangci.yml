@@ -40,9 +40,6 @@ linters:
       - source: "defer stream\\.Close\\(\\)"
         linters: [errcheck]
 
-linters-settings:
-  misspell:
-    locale: US
-
-issues:
-  max-same-issues: 0
+  settings:
+    misspell:
+      locale: US
