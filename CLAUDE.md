@@ -46,6 +46,18 @@ Prefix: `SYL_`
 - Public: 8080 (default)
 - Internal (metrics/health): 9090 (default)
 
+## Git Workflow
+- **Never push directly to main.** All changes go through a PR.
+- Branch from main: `git checkout -b feature/<short-description>`
+- CI must pass (lint, test, build) before merge.
+- VERSION bump required on every PR.
+
+## CI
+- `golangci-lint` gates all PRs via GitHub Actions.
+- Config: `.golangci.yml` (errcheck, govet, staticcheck, unused, ineffassign, misspell).
+- Lint runs in CI only — do not require it locally.
+
 ## Reference
 `~/code/helloworld` — canonical patterns to mirror.
 Spec at `.claude/spec.md` (gitignored).
+Design docs at `docs/design/`.

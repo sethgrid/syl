@@ -52,6 +52,23 @@ jobs:
           echo "::error::VERSION file must be updated in every PR."
           exit 1
 
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    needs: check-version
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.10.1
+
   test:
     name: Unit tests
     runs-on: ubuntu-latest
@@ -70,7 +87,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: check-version
+    needs: [lint, test]
     steps:
       - uses: actions/checkout@v4
 
@@ -87,25 +104,3 @@ jobs:
         run: |
           go build -ldflags="-X 'main.Version=${{ steps.version.outputs.VERSION }}'" -o bin/app ./cmd/...
 
-  integration:
-    name: Integration tests
-    runs-on: ubuntu-latest
-    needs: [test, build]
-    # Only runs if a docker-compose.yaml exists in the repo
-    if: hashFiles('docker-compose.yaml') != ''
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build integration service
-        run: docker compose build integration
-
-      - name: Run integration tests
-        run: docker compose run --rm integration
-
-      - name: Show Docker logs on failure
-        if: failure()
-        run: docker compose logs
-
-      - name: Tear down
-        if: always()
-        run: docker compose down

@@ -47,7 +47,7 @@ func TestSQLiteStore(t *testing.T) {
 
 	t.Run("recent respects limit", func(t *testing.T) {
 		for i := 0; i < 5; i++ {
-			store.Add(1, "user", "msg")
+			_, _ = store.Add(1, "user", "msg")
 		}
 		msgs, err := store.Recent(1, 3)
 		require.NoError(t, err)

@@ -1,0 +1,45 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - misspell
+    - staticcheck
+    - unused
+  exclusions:
+    rules:
+      - path: "_test\\.go|fake\\.go"
+        linters: [unused]
+      # All errcheck in internal/sse/ — SSE writes fail expectedly on disconnect
+      - path: "internal/sse/"
+        linters: [errcheck]
+      # defer Close() errors are rarely meaningful and clutter code
+      - source: "defer.*\\.Close\\(\\)"
+        linters: [errcheck]
+      # non-defer Close() on temp files and response bodies in tests is best-effort
+      - source: "\\.Close\\(\\)"
+        path: "_test\\.go"
+        linters: [errcheck]
+      # os.Remove in test cleanup is best-effort
+      - source: "os\\.Remove"
+        path: "_test\\.go"
+        linters: [errcheck]
+      # srv.Serve() runs in goroutine in tests; error handled by LastError()
+      - source: "srv\\.Serve\\(\\)"
+        linters: [errcheck]
+      # db.Exec for fire-and-forget cleanup (delete pending events)
+      - source: "b\\.db\\.Exec"
+        linters: [errcheck]
+      # rows.Close() in production defer — error not actionable
+      - source: "defer rows\\.Close\\(\\)"
+        linters: [errcheck]
+      # stream.Close() in production defer — error not actionable
+      - source: "defer stream\\.Close\\(\\)"
+        linters: [errcheck]
+
+  settings:
+    misspell:
+      locale: US

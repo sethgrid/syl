@@ -41,6 +41,6 @@ func Middleware(parent *slog.Logger, debug bool) func(http.Handler) http.Handler
 
 func newRID() string {
 	b := make([]byte, 8)
-	rand.Read(b)
+	_, _ = rand.Read(b) // crypto/rand.Read never errors (Go 1.20+)
 	return fmt.Sprintf("%x", b)
 }

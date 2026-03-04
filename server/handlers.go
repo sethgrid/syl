@@ -32,17 +32,19 @@ func handleIndex() http.HandlerFunc {
 func handleHealthcheck() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, "OK")
+		_, _ = fmt.Fprint(w, "OK")
 	}
 }
 
 func handleStatus(version string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
+		if err := json.NewEncoder(w).Encode(map[string]string{
 			"version": version,
 			"status":  "ok",
-		})
+		}); err != nil {
+			logger.FromRequest(r).Error("encode status", "error", err)
+		}
 	}
 }
 
@@ -109,12 +111,23 @@ func handleMessage(
 		go func() {
 			ctx := r.Context()
 
+			publish := func(evt sse.Event) {
+				if err := broker.Publish(ag.ID, evt); err != nil {
+					log.Error("publish event", "type", evt.Type, "error", err)
+				}
+			}
+			persistAssistant := func(content string) {
+				if _, err := chats.Add(ag.ID, "assistant", content); err != nil {
+					log.Error("persist assistant message", "error", err)
+				}
+			}
+
 			// 4. Pre-classify.
 			history := recentHistory(ctx, log, chats, ag.ID, 20)
 			result, err := clf.Classify(ctx, ag.Soul, history, sk.Names(), req.Text)
 			if err != nil {
 				log.Error("classify", "error", err)
-				broker.Publish(ag.ID, sse.Event{Type: "error", Content: "classification failed"})
+				publish(sse.Event{Type: "error", Content: "classification failed"})
 				return
 			}
 
@@ -134,29 +147,27 @@ func handleMessage(
 
 			switch result.ResponseType {
 			case "inbox_read":
-				// Fetch open inbox items and stream them as a formatted response.
 				items, err := inbx.ListOpen()
 				if err != nil {
 					log.Error("list inbox", "error", err)
-					broker.Publish(ag.ID, sse.Event{Type: "error", Content: "could not read inbox"})
+					publish(sse.Event{Type: "error", Content: "could not read inbox"})
 					return
 				}
 				var sb strings.Builder
 				if len(items) == 0 {
 					sb.WriteString("Your inbox is empty.")
 				} else {
-					sb.WriteString(fmt.Sprintf("You have %d open inbox item(s):\n\n", len(items)))
+					fmt.Fprintf(&sb, "You have %d open inbox item(s):\n\n", len(items))
 					for i, it := range items {
-						sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, it.Question))
+						fmt.Fprintf(&sb, "%d. %s\n", i+1, it.Question)
 					}
 				}
-				broker.Publish(ag.ID, sse.Event{Type: "token", Content: sb.String()})
-				broker.Publish(ag.ID, sse.Event{Type: "done"})
-				chats.Add(ag.ID, "assistant", sb.String())
+				publish(sse.Event{Type: "token", Content: sb.String()})
+				publish(sse.Event{Type: "done"})
+				persistAssistant(sb.String())
 
 			case "scheduled":
-				// Jobs already enqueued above. Nothing to stream now.
-				broker.Publish(ag.ID, sse.Event{Type: "done"})
+				publish(sse.Event{Type: "done"})
 
 			default: // "immediate" or anything unknown
 				systemPrompt := buildSystemPrompt(ag.Soul, sk, result.RelevantSkillNames)
@@ -167,12 +178,12 @@ func handleMessage(
 				})
 				if err != nil {
 					log.Error("claude stream", "error", err)
-					broker.Publish(ag.ID, sse.Event{Type: "error", Content: "stream failed"})
+					publish(sse.Event{Type: "error", Content: "stream failed"})
 					return
 				}
-				broker.Publish(ag.ID, sse.Event{Type: "done"})
+				publish(sse.Event{Type: "done"})
 				if full != "" {
-					chats.Add(ag.ID, "assistant", full)
+					persistAssistant(full)
 				}
 			}
 		}()
@@ -238,7 +249,9 @@ func handleInboxList(inbx inbox.Store) http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(items)
+		if err := json.NewEncoder(w).Encode(items); err != nil {
+			logger.FromRequest(r).Error("encode inbox list", "error", err)
+		}
 	}
 }
 
@@ -279,7 +292,9 @@ func handleGetSoul(agents agent.Store) http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"soul": ag.Soul})
+		if err := json.NewEncoder(w).Encode(map[string]string{"soul": ag.Soul}); err != nil {
+			logger.FromRequest(r).Error("encode soul", "error", err)
+		}
 	}
 }
 
