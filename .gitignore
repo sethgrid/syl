@@ -1,0 +1,10 @@
+data/
+inbox/
+*.db
+*.db-wal
+*.db-shm
+bin/
+.claude/
+
+# Dolt database files (added by bd init)
+.dolt/

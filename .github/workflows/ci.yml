@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  pull_request:
+    branches: ['*']
+  push:
+    branches: ['*']
+
+jobs:
+  check-version:
+    name: Check VERSION file changed
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if VERSION file was changed
+        id: check_version
+        run: |
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          else
+            BASE_SHA="${{ github.event.before }}"
+            HEAD_SHA="${{ github.event.after }}"
+            if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" == "0000000000000000000000000000000000000000" ]; then
+              if git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
+                BASE_SHA="HEAD~1"
+              else
+                if [ -f "VERSION" ]; then
+                  echo "changed=true" >> $GITHUB_OUTPUT
+                  exit 0
+                else
+                  echo "changed=false" >> $GITHUB_OUTPUT
+                  exit 1
+                fi
+              fi
+            fi
+          fi
+          if git diff --name-only "$BASE_SHA" "$HEAD_SHA" | grep -q "^VERSION$"; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "❌ VERSION file has NOT been updated"
+          fi
+
+      - name: Fail if VERSION not changed
+        if: steps.check_version.outputs.changed != 'true'
+        run: |
+          echo "::error::VERSION file must be updated in every PR."
+          exit 1
+
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    needs: check-version
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run unit tests
+        run: go test ./...
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: check-version
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Read VERSION
+        id: version
+        run: echo "VERSION=$(cat VERSION)" >> $GITHUB_OUTPUT
+
+      - name: Build
+        run: |
+          go build -ldflags="-X 'main.Version=${{ steps.version.outputs.VERSION }}'" -o bin/app ./cmd/...
+
+  integration:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    needs: [test, build]
+    # Only runs if a docker-compose.yaml exists in the repo
+    if: hashFiles('docker-compose.yaml') != ''
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build integration service
+        run: docker compose build integration
+
+      - name: Run integration tests
+        run: docker compose run --rm integration
+
+      - name: Show Docker logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Tear down
+        if: always()
+        run: docker compose down
