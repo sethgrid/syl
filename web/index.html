@@ -33,9 +33,17 @@
 
   <script>
     // Persistent per-browser identity.
+    // crypto.randomUUID() requires HTTPS in Safari — use a manual fallback for HTTP LAN.
+    function randomUUID() {
+      if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0;
+        return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+      });
+    }
     let fingerprint = localStorage.getItem('syl_fp');
     if (!fingerprint) {
-      fingerprint = crypto.randomUUID();
+      fingerprint = randomUUID();
       localStorage.setItem('syl_fp', fingerprint);
     }
 
