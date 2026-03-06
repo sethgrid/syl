@@ -127,6 +127,9 @@ func (s *Server) Serve() error {
 	router.With(withTimeout).Post("/message", handleMessage(
 		s.agents, s.chats, s.broker, s.clf, s.claude, s.skills, s.inboxItems, s.jobStore,
 	))
+	router.With(withTimeout).Post("/chat", handleChat(
+		s.agents, s.chats, s.claude, s.skills,
+	))
 	router.With(withTimeout).Get("/inbox", handleInboxList(s.inboxItems))
 	router.With(withTimeout).Post("/inbox/{id}/answer", handleInboxAnswer(s.inboxItems))
 	router.With(withTimeout).Get("/agents/{id}/soul", handleGetSoul(s.agents))

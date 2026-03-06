@@ -91,6 +91,54 @@ type messageReq struct {
 	Fingerprint string `json:"fingerprint"`
 }
 
+// handleChat is a synchronous variant of handleMessage for testing and CI.
+// No goroutine, no SSE, no classifier, no jobs — just a blocking Claude call.
+func handleChat(
+	agents agent.Store,
+	chats chat.Store,
+	cl claude.Client,
+	sk *skills.Loader,
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		log := logger.FromRequest(r)
+		var req messageReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		if req.Fingerprint == "" {
+			http.Error(w, "fingerprint required", http.StatusBadRequest)
+			return
+		}
+		ag, err := agents.Resolve(req.AgentName, req.Fingerprint)
+		if err != nil {
+			log.Error("resolve agent", "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if _, err := chats.Add(ag.ID, "user", req.Text); err != nil {
+			log.Error("add chat message", "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		history := recentHistory(r.Context(), log, chats, ag.ID, 20)
+		response, err := cl.Complete(r.Context(), buildSystemPrompt(ag.Soul, sk, nil), buildMessages(history))
+		if err != nil {
+			log.Error("claude complete", "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if response != "" {
+			if _, err := chats.Add(ag.ID, "assistant", response); err != nil {
+				log.Error("persist assistant message", "error", err)
+				// non-fatal — response already computed
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"response": response})
+	}
+}
+
 // handleMessage is the main message ingestion endpoint.
 // Pipeline: resolve agent → persist message → classify → stream Claude response via SSE.
 func handleMessage(
@@ -134,8 +182,10 @@ func handleMessage(
 		w.WriteHeader(http.StatusAccepted)
 
 		// 3. Run pipeline asynchronously so HTTP response is returned immediately.
+		// Use context.Background() — r.Context() is canceled when the handler returns,
+		// which would kill the in-flight Claude stream.
 		go func() {
-			ctx := r.Context()
+			ctx := context.Background()
 
 			publish := func(evt sse.Event) {
 				if err := broker.Publish(ag.ID, evt); err != nil {
