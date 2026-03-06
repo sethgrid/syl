@@ -17,7 +17,8 @@
     #send-btn { background: #1e3a5f; border: none; color: #e0e0e0; padding: 0.6rem 1.2rem; border-radius: 0.5rem; cursor: pointer; font-size: 1rem; }
     #send-btn:hover { background: #2a4f7a; }
     #send-btn:disabled { opacity: 0.4; cursor: default; }
-    #debug-log { display: block; background: #111; border-top: 1px solid #333; font-size: 0.65rem; font-family: monospace; color: #888; max-height: 120px; overflow-y: auto; padding: 0.5rem; }
+    #debug-log { display: none; background: #111; border-top: 1px solid #333; font-size: 0.65rem; font-family: monospace; color: #888; max-height: 120px; overflow-y: auto; padding: 0.5rem; }
+    #debug-log.visible { display: block; }
     #debug-log div { padding: 1px 0; }
     #debug-log div.err { color: #e06c6c; }
   </style>
@@ -64,6 +65,9 @@ function dbg(msg, isErr) {
       debugLogEl.scrollTop = debugLogEl.scrollHeight;
       console.log('[syl]', msg);
     }
+
+    // Double-tap the status bar to toggle the debug log.
+    statusEl.addEventListener('dblclick', () => debugLogEl.classList.toggle('visible'));
 
     function setStatus(text) { statusEl.textContent = text; dbg('status → ' + text); }
 
