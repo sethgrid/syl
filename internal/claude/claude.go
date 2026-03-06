@@ -35,7 +35,7 @@ func New(apiKey string) *RealClient {
 	c := anthropic.NewClient(option.WithAPIKey(apiKey))
 	return &RealClient{
 		inner: c,
-		model: string(anthropic.ModelClaude3_5HaikuLatest),
+		model: "claude-haiku-4-5-20251001",
 	}
 }
 
