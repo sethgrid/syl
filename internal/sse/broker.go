@@ -98,11 +98,13 @@ func (b *Broker) Subscribe(agentID int64, w http.ResponseWriter, r *http.Request
 	}
 
 	// Send headers immediately so the client gets the 200 before any events.
-	// Send a named "ready" event: iOS Safari does not reliably fire EventSource.onopen,
-	// but it does fire named-event listeners. The comment before it also helps
-	// some proxies recognise this as a streaming response.
+	//
+	// iOS Safari buffers SSE responses until it has received ~2KB of data before
+	// firing any events. We pad with a comment of that size first, then send a
+	// named "ready" event. Safari does not reliably fire EventSource.onopen but
+	// does fire named-event listeners, so the UI listens for "ready" instead.
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, ": connected\n\n")
+	fmt.Fprintf(w, ": %s\n\n", string(make([]byte, 2048))) // 2KB padding for iOS Safari
 	fmt.Fprintf(w, "event: ready\ndata: {}\n\n")
 	flusher.Flush()
 

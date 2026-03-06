@@ -11,17 +11,22 @@
     .msg { max-width: 70%; padding: 0.6rem 1rem; border-radius: 1rem; line-height: 1.5; }
     .msg.user { background: #1e3a5f; align-self: flex-end; border-bottom-right-radius: 0.25rem; }
     .msg.assistant { background: #1a1a1a; align-self: flex-start; border-bottom-left-radius: 0.25rem; }
-    #status { font-size: 0.75rem; color: #555; text-align: center; padding: 0.25rem; }
+    #status { font-size: 0.75rem; color: #555; text-align: center; padding: 0.25rem; cursor: pointer; }
     #input-row { display: flex; gap: 0.5rem; padding: 1rem 1.5rem; border-top: 1px solid #222; background: #0f0f0f; }
     #text-input { flex: 1; background: #1a1a1a; border: 1px solid #333; border-radius: 0.5rem; color: #e0e0e0; padding: 0.6rem 1rem; font-size: 1rem; }
     #send-btn { background: #1e3a5f; border: none; color: #e0e0e0; padding: 0.6rem 1.2rem; border-radius: 0.5rem; cursor: pointer; font-size: 1rem; }
     #send-btn:hover { background: #2a4f7a; }
     #send-btn:disabled { opacity: 0.4; cursor: default; }
+    #debug-log { display: none; background: #111; border-top: 1px solid #333; font-size: 0.65rem; font-family: monospace; color: #888; max-height: 120px; overflow-y: auto; padding: 0.5rem; }
+    #debug-log.visible { display: block; }
+    #debug-log div { padding: 1px 0; }
+    #debug-log div.err { color: #e06c6c; }
   </style>
 </head>
 <body>
   <div id="chat"></div>
   <div id="status">connecting…</div>
+  <div id="debug-log"></div>
   <div id="input-row">
     <input id="text-input" type="text" placeholder="Message Syl…" autofocus disabled>
     <button id="send-btn" disabled>Send</button>
@@ -39,11 +44,32 @@
     let currentMsg = null;
     let eventSource = null;
 
-    const statusEl = document.getElementById('status');
-    const inputEl  = document.getElementById('text-input');
-    const sendBtn  = document.getElementById('send-btn');
+    const statusEl   = document.getElementById('status');
+    const inputEl    = document.getElementById('text-input');
+    const sendBtn    = document.getElementById('send-btn');
+    const debugLogEl = document.getElementById('debug-log');
 
-    function setStatus(text) { statusEl.textContent = text; }
+    // Tap status bar 3 times to toggle debug log.
+    let tapCount = 0, tapTimer = null;
+    statusEl.addEventListener('click', () => {
+      tapCount++;
+      clearTimeout(tapTimer);
+      tapTimer = setTimeout(() => {
+        if (tapCount >= 3) debugLogEl.classList.toggle('visible');
+        tapCount = 0;
+      }, 600);
+    });
+
+    function dbg(msg, isErr) {
+      const el = document.createElement('div');
+      el.textContent = new Date().toISOString().slice(11, 23) + ' ' + msg;
+      if (isErr) el.className = 'err';
+      debugLogEl.appendChild(el);
+      debugLogEl.scrollTop = debugLogEl.scrollHeight;
+      console.log('[syl]', msg);
+    }
+
+    function setStatus(text) { statusEl.textContent = text; dbg('status → ' + text); }
 
     function enable() {
       inputEl.disabled = false;
@@ -62,27 +88,32 @@
 
     function connectSSE(aid) {
       if (eventSource) eventSource.close();
+      dbg('EventSource opening agent_id=' + aid);
       eventSource = new EventSource('/sse?agent_id=' + aid);
 
-      // onopen is unreliable on iOS Safari — use the named 'ready' event instead.
-      // Keep onopen as a fallback for other browsers.
+      // onopen fires on desktop browsers when HTTP 200 headers arrive.
+      // iOS Safari often skips it — we also listen for the named 'ready' event.
       eventSource.onopen = () => {
+        dbg('onopen fired readyState=' + eventSource.readyState);
         setStatus('connected');
         enable();
       };
 
       eventSource.addEventListener('ready', () => {
+        dbg('ready event fired');
         setStatus('connected');
         enable();
       });
 
-      eventSource.onerror = () => {
+      eventSource.onerror = (e) => {
+        dbg('onerror readyState=' + eventSource.readyState, true);
         setStatus('reconnecting…');
         inputEl.disabled = true;
         sendBtn.disabled = true;
       };
 
       eventSource.onmessage = (e) => {
+        dbg('message: ' + e.data.slice(0, 60));
         const evt = JSON.parse(e.data);
         if (evt.type === 'token') {
           if (!currentMsg) currentMsg = appendMsg('assistant', '');
@@ -99,12 +130,15 @@
 
     async function init() {
       try {
+        dbg('fetching session fp=' + fingerprint.slice(0,8) + '…');
         const res = await fetch('/session?fingerprint=' + encodeURIComponent(fingerprint));
         if (!res.ok) throw new Error('session ' + res.status);
         const data = await res.json();
         agentID = data.agent_id;
+        dbg('session ok agent_id=' + agentID);
         connectSSE(agentID);
       } catch (err) {
+        dbg('init error: ' + err.message, true);
         setStatus('error: ' + err.message);
       }
     }
