@@ -64,10 +64,17 @@
       if (eventSource) eventSource.close();
       eventSource = new EventSource('/sse?agent_id=' + aid);
 
+      // onopen is unreliable on iOS Safari — use the named 'ready' event instead.
+      // Keep onopen as a fallback for other browsers.
       eventSource.onopen = () => {
         setStatus('connected');
         enable();
       };
+
+      eventSource.addEventListener('ready', () => {
+        setStatus('connected');
+        enable();
+      });
 
       eventSource.onerror = () => {
         setStatus('reconnecting…');

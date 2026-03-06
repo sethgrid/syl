@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"time"
 )
 
 // Event is a single SSE payload.
@@ -96,18 +97,28 @@ func (b *Broker) Subscribe(agentID int64, w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Send headers and a keep-alive comment immediately so the client
-	// receives the 200 response before any events arrive.
+	// Send headers immediately so the client gets the 200 before any events.
+	// Send a named "ready" event: iOS Safari does not reliably fire EventSource.onopen,
+	// but it does fire named-event listeners. The comment before it also helps
+	// some proxies recognise this as a streaming response.
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, ": connected\n\n")
+	fmt.Fprintf(w, "event: ready\ndata: {}\n\n")
 	flusher.Flush()
 
 	b.drainPending(agentID, w, flusher)
+
+	heartbeat := time.NewTicker(20 * time.Second)
+	defer heartbeat.Stop()
 
 	for {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-heartbeat.C:
+			// Keep the TCP connection alive through mobile NAT / cellular timeouts.
+			fmt.Fprintf(w, ": ping\n\n")
+			flusher.Flush()
 		case evt, ok := <-ch:
 			if !ok {
 				return
