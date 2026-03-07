@@ -17,18 +17,19 @@ func NewFakeStore() *FakeStore {
 	return &FakeStore{next: 1}
 }
 
-func (f *FakeStore) Enqueue(agentID int64, jobType string, payload any, runAt time.Time) (*Job, error) {
+func (f *FakeStore) Enqueue(agentID int64, jobType string, payload any, runAt time.Time, recurrence string) (*Job, error) {
 	data, _ := json.Marshal(payload)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	j := &Job{
-		ID:        f.next,
-		AgentID:   agentID,
-		JobType:   jobType,
-		Payload:   data,
-		Status:    "pending",
-		RunAt:     runAt,
-		CreatedAt: time.Now(),
+		ID:         f.next,
+		AgentID:    agentID,
+		JobType:    jobType,
+		Payload:    data,
+		Status:     "pending",
+		RunAt:      runAt,
+		Recurrence: recurrence,
+		CreatedAt:  time.Now(),
 	}
 	f.next++
 	f.jobs = append(f.jobs, j)

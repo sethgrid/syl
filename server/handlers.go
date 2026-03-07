@@ -216,7 +216,7 @@ func handleMessage(
 
 			// 6. Enqueue scheduled jobs if any.
 			for _, js := range result.Jobs {
-				if _, err := jobStore.Enqueue(ag.ID, js.Type, js.Payload, parseRunAt(js.RunAt)); err != nil {
+				if _, err := jobStore.Enqueue(ag.ID, js.Type, js.Payload, parseRunAt(js.RunAt), js.Recurrence); err != nil {
 					log.Error("enqueue job", "job_type", js.Type, "error", err)
 				}
 			}
@@ -242,7 +242,7 @@ func handleMessage(
 				publish(sse.Event{Type: "done"})
 				persistAssistant(sb.String())
 
-			case "scheduled":
+			case "scheduled", "scheduled_once", "scheduled_recurring":
 				publish(sse.Event{Type: "done"})
 
 			default: // "immediate" or anything unknown
@@ -314,6 +314,36 @@ func parseRunAt(s string) time.Time {
 		return time.Now()
 	}
 	return t
+}
+
+type historyItem struct {
+	Role      string    `json:"role"`
+	Content   string    `json:"content"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func handleHistory(chats chat.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		agentID, err := strconv.ParseInt(r.URL.Query().Get("agent_id"), 10, 64)
+		if err != nil {
+			http.Error(w, "invalid agent_id", http.StatusBadRequest)
+			return
+		}
+		msgs, err := chats.History(agentID, 100_000, 1000)
+		if err != nil {
+			logger.FromRequest(r).Error("history", "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		out := make([]historyItem, 0, len(msgs))
+		for _, m := range msgs {
+			out = append(out, historyItem{Role: m.Role, Content: m.Content, CreatedAt: m.CreatedAt})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(out); err != nil {
+			logger.FromRequest(r).Error("encode history", "error", err)
+		}
+	}
 }
 
 func handleInboxList(inbx inbox.Store) http.HandlerFunc {
@@ -404,11 +434,67 @@ type jobProcessor struct {
 	agents     agent.Store
 	chats      chat.Store
 	inboxItems inbox.Store
+	skills     *skills.Loader
+	jobStore   jobs.Store
 	logger     *slog.Logger
 }
 
 func (p *jobProcessor) Process(job *jobs.Job) error {
-	// TODO (Epic 4): implement soul_update, send_message, inbox_write job types
 	p.logger.Info("processing job", "job_id", job.ID, "job_type", job.JobType)
-	return fmt.Errorf("unknown job type: %s", job.JobType)
+	switch job.JobType {
+	case "send_message":
+		return p.processSendMessage(job)
+	default:
+		return fmt.Errorf("unknown job type: %s", job.JobType)
+	}
+}
+
+func (p *jobProcessor) processSendMessage(job *jobs.Job) error {
+	ctx := context.Background()
+
+	var payload struct {
+		Prompt string `json:"prompt"`
+	}
+	if err := json.Unmarshal(job.Payload, &payload); err != nil {
+		return fmt.Errorf("decode payload: %w", err)
+	}
+
+	ag, err := p.agents.Get(job.AgentID)
+	if err != nil {
+		return fmt.Errorf("get agent: %w", err)
+	}
+
+	history := recentHistory(ctx, p.logger, p.chats, job.AgentID, 20)
+	systemPrompt := buildSystemPrompt(ag.Soul, p.skills, nil)
+	msgs := buildMessages(history)
+	msgs = append(msgs, claude.Message{Role: "user", Content: payload.Prompt})
+
+	response, err := p.claude.Complete(ctx, systemPrompt, msgs)
+	if err != nil {
+		return fmt.Errorf("claude complete: %w", err)
+	}
+
+	if _, err := p.chats.Add(job.AgentID, "assistant", response); err != nil {
+		p.logger.Error("persist assistant message", "error", err)
+	}
+
+	if err := p.broker.Publish(job.AgentID, sse.Event{Type: "token", Content: response}); err != nil {
+		p.logger.Error("publish token", "error", err)
+	}
+	if err := p.broker.Publish(job.AgentID, sse.Event{Type: "done"}); err != nil {
+		p.logger.Error("publish done", "error", err)
+	}
+
+	// Re-enqueue for recurring jobs.
+	if job.Recurrence != "" {
+		dur, err := time.ParseDuration(job.Recurrence)
+		if err == nil {
+			nextRunAt := job.RunAt.Add(dur)
+			if _, err := p.jobStore.Enqueue(job.AgentID, job.JobType, json.RawMessage(job.Payload), nextRunAt, job.Recurrence); err != nil {
+				p.logger.Error("re-enqueue recurring job", "error", err)
+			}
+		}
+	}
+
+	return nil
 }

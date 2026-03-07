@@ -28,11 +28,17 @@
   <div id="status">connecting…</div>
   <div id="debug-log"></div>
   <div id="input-row">
-    <input id="text-input" type="text" placeholder="Message Syl…" autofocus disabled>
+    <input id="text-input" type="text" autofocus disabled>
     <button id="send-btn" disabled>Send</button>
   </div>
 
   <script>
+    // Named agent from URL: ?agent=<name>, default "syl".
+    const agentName = new URLSearchParams(window.location.search).get('agent') || 'syl';
+    function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+    document.title = 'Syl · ' + cap(agentName);
+    document.getElementById('text-input').placeholder = 'Message ' + cap(agentName) + '\u2026';
+
     // Persistent per-browser identity.
     // crypto.randomUUID() requires HTTPS in Safari — use a manual fallback for HTTP LAN.
     function randomUUID() {
@@ -57,7 +63,7 @@
     const sendBtn    = document.getElementById('send-btn');
     const debugLogEl = document.getElementById('debug-log');
 
-function dbg(msg, isErr) {
+    function dbg(msg, isErr) {
       const el = document.createElement('div');
       el.textContent = new Date().toISOString().slice(11, 23) + ' ' + msg;
       if (isErr) el.className = 'err';
@@ -128,14 +134,33 @@ function dbg(msg, isErr) {
       };
     }
 
+    async function loadHistory(aid) {
+      try {
+        const res = await fetch('/history?agent_id=' + aid);
+        if (!res.ok) throw new Error('history ' + res.status);
+        const items = await res.json();
+        for (const item of items) {
+          if (item.role === 'user' || item.role === 'assistant') {
+            appendMsg(item.role, item.content);
+          }
+        }
+        if (items.length > 0) {
+          document.getElementById('chat').lastElementChild?.scrollIntoView({ behavior: 'instant' });
+        }
+      } catch (err) {
+        dbg('loadHistory error: ' + err.message, true);
+      }
+    }
+
     async function init() {
       try {
         dbg('fetching session fp=' + fingerprint.slice(0,8) + '…');
-        const res = await fetch('/session?fingerprint=' + encodeURIComponent(fingerprint));
+        const res = await fetch('/session?fingerprint=' + encodeURIComponent(fingerprint) + '&name=' + encodeURIComponent(agentName));
         if (!res.ok) throw new Error('session ' + res.status);
         const data = await res.json();
         agentID = data.agent_id;
         dbg('session ok agent_id=' + agentID);
+        await loadHistory(agentID);
         connectSSE(agentID);
       } catch (err) {
         dbg('init error: ' + err.message, true);
@@ -152,7 +177,7 @@ function dbg(msg, isErr) {
       const res = await fetch('/message', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, fingerprint }),
+        body: JSON.stringify({ text, fingerprint, agent_name: agentName }),
       });
       if (!res.ok) {
         appendMsg('assistant', '[error] message failed (' + res.status + ')');

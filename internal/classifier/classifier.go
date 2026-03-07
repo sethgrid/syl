@@ -14,9 +14,10 @@ type Result struct {
 
 // JobSpec describes a job to enqueue.
 type JobSpec struct {
-	Type    string         `json:"type"`
-	Payload map[string]any `json:"payload"`
-	RunAt   string         `json:"run_at"` // RFC3339, empty means now
+	Type       string         `json:"type"`
+	Payload    map[string]any `json:"payload"`
+	RunAt      string         `json:"run_at"`      // RFC3339, empty means now
+	Recurrence string         `json:"recurrence"`  // "1h", "24h", etc.; empty = once
 }
 
 // Classifier determines how to handle a user message.

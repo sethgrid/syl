@@ -10,19 +10,20 @@ import (
 )
 
 type Job struct {
-	ID        int64
-	AgentID   int64
-	JobType   string
-	Payload   json.RawMessage
-	Status    string
-	RunAt     time.Time
-	LockedAt  sql.NullTime
-	CreatedAt time.Time
+	ID         int64
+	AgentID    int64
+	JobType    string
+	Payload    json.RawMessage
+	Status     string
+	RunAt      time.Time
+	LockedAt   sql.NullTime
+	Recurrence string
+	CreatedAt  time.Time
 }
 
 // Store is the interface for job persistence.
 type Store interface {
-	Enqueue(agentID int64, jobType string, payload any, runAt time.Time) (*Job, error)
+	Enqueue(agentID int64, jobType string, payload any, runAt time.Time, recurrence string) (*Job, error)
 	FetchDue() (*Job, error)
 	MarkRunning(jobID int64) error
 	MarkDone(jobID int64) error
@@ -128,24 +129,24 @@ func NewSQLiteStore(db *sql.DB) *SQLiteStore {
 	return &SQLiteStore{db: db}
 }
 
-func (s *SQLiteStore) Enqueue(agentID int64, jobType string, payload any, runAt time.Time) (*Job, error) {
+func (s *SQLiteStore) Enqueue(agentID int64, jobType string, payload any, runAt time.Time, recurrence string) (*Job, error) {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("marshal payload: %w", err)
 	}
 	res, err := s.db.Exec(
-		`INSERT INTO jobs (agent_id, job_type, payload, run_at) VALUES (?, ?, ?, ?)`,
-		agentID, jobType, string(data), runAt)
+		`INSERT INTO jobs (agent_id, job_type, payload, run_at, recurrence) VALUES (?, ?, ?, ?, ?)`,
+		agentID, jobType, string(data), runAt, recurrence)
 	if err != nil {
 		return nil, fmt.Errorf("insert job: %w", err)
 	}
 	id, _ := res.LastInsertId()
-	return &Job{ID: id, AgentID: agentID, JobType: jobType, Payload: data, Status: "pending", RunAt: runAt}, nil
+	return &Job{ID: id, AgentID: agentID, JobType: jobType, Payload: data, Status: "pending", RunAt: runAt, Recurrence: recurrence}, nil
 }
 
 func (s *SQLiteStore) FetchDue() (*Job, error) {
 	row := s.db.QueryRow(
-		`SELECT id, agent_id, job_type, payload, status, run_at, locked_at, created_at
+		`SELECT id, agent_id, job_type, payload, status, run_at, locked_at, recurrence, created_at
 		 FROM jobs WHERE status = 'pending' AND run_at <= datetime('now')
 		 ORDER BY run_at ASC LIMIT 1`)
 	return scanJob(row)
@@ -183,7 +184,7 @@ func (s *SQLiteStore) Close() error { return nil }
 
 func scanJob(row *sql.Row) (*Job, error) {
 	var j Job
-	if err := row.Scan(&j.ID, &j.AgentID, &j.JobType, &j.Payload, &j.Status, &j.RunAt, &j.LockedAt, &j.CreatedAt); err != nil {
+	if err := row.Scan(&j.ID, &j.AgentID, &j.JobType, &j.Payload, &j.Status, &j.RunAt, &j.LockedAt, &j.Recurrence, &j.CreatedAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
