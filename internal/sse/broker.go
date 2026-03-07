@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"time"
 )
 
 // Event is a single SSE payload.
@@ -96,18 +97,30 @@ func (b *Broker) Subscribe(agentID int64, w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Send headers and a keep-alive comment immediately so the client
-	// receives the 200 response before any events arrive.
+	// Send headers immediately so the client gets the 200 before any events.
+	//
+	// iOS Safari buffers SSE responses until it has received ~2KB of data before
+	// firing any events. We pad with a comment of that size first, then send a
+	// named "ready" event. Safari does not reliably fire EventSource.onopen but
+	// does fire named-event listeners, so the UI listens for "ready" instead.
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, ": connected\n\n")
+	fmt.Fprintf(w, ": %s\n\n", string(make([]byte, 2048))) // 2KB padding for iOS Safari
+	fmt.Fprintf(w, "event: ready\ndata: {}\n\n")
 	flusher.Flush()
 
 	b.drainPending(agentID, w, flusher)
+
+	heartbeat := time.NewTicker(20 * time.Second)
+	defer heartbeat.Stop()
 
 	for {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-heartbeat.C:
+			// Keep the TCP connection alive through mobile NAT / cellular timeouts.
+			fmt.Fprintf(w, ": ping\n\n")
+			flusher.Flush()
 		case evt, ok := <-ch:
 			if !ok {
 				return
