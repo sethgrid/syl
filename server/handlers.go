@@ -279,7 +279,7 @@ func handleMessage(
 					if err := jobStore.Cancel(*result.CancelJobID); err != nil {
 						msg = "No pending task found with that ID."
 					} else {
-						msg = fmt.Sprintf("Cancelled task #%d.", *result.CancelJobID)
+						msg = fmt.Sprintf("Canceled task #%d.", *result.CancelJobID)
 					}
 				} else {
 					msg = "Please specify the task ID to cancel."
