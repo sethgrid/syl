@@ -29,6 +29,8 @@ type Store interface {
 	MarkDone(jobID int64) error
 	MarkFailed(jobID int64) error
 	ResetStuck(threshold time.Duration) (int, error)
+	ListPending(agentID int64) ([]*Job, error)
+	Cancel(jobID int64) error
 	Close() error
 }
 
@@ -180,15 +182,51 @@ func (s *SQLiteStore) ResetStuck(threshold time.Duration) (int, error) {
 	return int(n), nil
 }
 
+func (s *SQLiteStore) ListPending(agentID int64) ([]*Job, error) {
+	rows, err := s.db.Query(
+		`SELECT id, agent_id, job_type, payload, status, run_at, locked_at, recurrence, created_at
+		 FROM jobs WHERE agent_id = ? AND status = 'pending' ORDER BY run_at ASC`,
+		agentID)
+	if err != nil {
+		return nil, fmt.Errorf("list pending: %w", err)
+	}
+	defer rows.Close()
+	var out []*Job
+	for rows.Next() {
+		var j Job
+		var payload string
+		if err := rows.Scan(&j.ID, &j.AgentID, &j.JobType, &payload, &j.Status, &j.RunAt, &j.LockedAt, &j.Recurrence, &j.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan job: %w", err)
+		}
+		j.Payload = json.RawMessage(payload)
+		out = append(out, &j)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteStore) Cancel(jobID int64) error {
+	res, err := s.db.Exec(`UPDATE jobs SET status = 'failed' WHERE id = ? AND status = 'pending'`, jobID)
+	if err != nil {
+		return fmt.Errorf("cancel job: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("job not found or already completed")
+	}
+	return nil
+}
+
 func (s *SQLiteStore) Close() error { return nil }
 
 func scanJob(row *sql.Row) (*Job, error) {
 	var j Job
-	if err := row.Scan(&j.ID, &j.AgentID, &j.JobType, &j.Payload, &j.Status, &j.RunAt, &j.LockedAt, &j.Recurrence, &j.CreatedAt); err != nil {
+	var payload string
+	if err := row.Scan(&j.ID, &j.AgentID, &j.JobType, &payload, &j.Status, &j.RunAt, &j.LockedAt, &j.Recurrence, &j.CreatedAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
 		return nil, err
 	}
+	j.Payload = json.RawMessage(payload)
 	return &j, nil
 }

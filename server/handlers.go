@@ -122,7 +122,7 @@ func handleChat(
 			return
 		}
 		history := recentHistory(r.Context(), log, chats, ag.ID, 20)
-		response, err := cl.Complete(r.Context(), buildSystemPrompt(ag.Soul, sk, nil), buildMessages(history))
+		response, err := cl.Complete(r.Context(), buildSystemPrompt(agentDisplayName(ag), ag.Soul, sk, nil), buildMessages(history))
 		if err != nil {
 			log.Error("claude complete", "error", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
@@ -243,10 +243,53 @@ func handleMessage(
 				persistAssistant(sb.String())
 
 			case "scheduled", "scheduled_once", "scheduled_recurring":
+				msg := buildScheduleConfirmation(result.Jobs)
+				publish(sse.Event{Type: "token", Content: msg})
 				publish(sse.Event{Type: "done"})
+				persistAssistant(msg)
+
+			case "job_list":
+				pending, err := jobStore.ListPending(ag.ID)
+				if err != nil {
+					log.Error("list pending jobs", "error", err)
+					publish(sse.Event{Type: "error", Content: "could not list scheduled tasks"})
+					return
+				}
+				var sb strings.Builder
+				if len(pending) == 0 {
+					sb.WriteString("No scheduled tasks.")
+				} else {
+					fmt.Fprintf(&sb, "You have %d scheduled task(s):\n\n", len(pending))
+					for i, j := range pending {
+						due := time.Until(j.RunAt).Round(time.Second)
+						if j.Recurrence != "" {
+							fmt.Fprintf(&sb, "%d. [#%d] %s — due in ~%s (every %s)\n", i+1, j.ID, jobPromptPreview(j), due, j.Recurrence)
+						} else {
+							fmt.Fprintf(&sb, "%d. [#%d] %s — due in ~%s\n", i+1, j.ID, jobPromptPreview(j), due)
+						}
+					}
+				}
+				publish(sse.Event{Type: "token", Content: sb.String()})
+				publish(sse.Event{Type: "done"})
+				persistAssistant(sb.String())
+
+			case "job_cancel":
+				var msg string
+				if result.CancelJobID != nil {
+					if err := jobStore.Cancel(*result.CancelJobID); err != nil {
+						msg = "No pending task found with that ID."
+					} else {
+						msg = fmt.Sprintf("Cancelled task #%d.", *result.CancelJobID)
+					}
+				} else {
+					msg = "Please specify the task ID to cancel."
+				}
+				publish(sse.Event{Type: "token", Content: msg})
+				publish(sse.Event{Type: "done"})
+				persistAssistant(msg)
 
 			default: // "immediate" or anything unknown
-				systemPrompt := buildSystemPrompt(ag.Soul, sk, result.RelevantSkillNames)
+				systemPrompt := buildSystemPrompt(agentDisplayName(ag), ag.Soul, sk, result.RelevantSkillNames)
 				msgs := buildMessages(history)
 
 				full, err := cl.Stream(ctx, systemPrompt, msgs, func(token string) error {
@@ -279,8 +322,19 @@ func recentHistory(ctx context.Context, log *slog.Logger, chats chat.Store, agen
 	return out
 }
 
-func buildSystemPrompt(soul string, sk *skills.Loader, skillNames []string) string {
+func agentDisplayName(ag *agent.Agent) string {
+	if ag.Name.Valid && ag.Name.String != "" {
+		return ag.Name.String
+	}
+	return "Syl"
+}
+
+func buildSystemPrompt(name, soul string, sk *skills.Loader, skillNames []string) string {
 	var sb strings.Builder
+	fmt.Fprintf(&sb, "You are %s, a personal AI assistant. Always respond as %s.\n", name, name)
+	sb.WriteString("Never reveal that you are Claude or that you were built by Anthropic. You are ")
+	sb.WriteString(name)
+	sb.WriteString(".\n\n")
 	if soul != "" {
 		sb.WriteString(soul)
 		sb.WriteString("\n\n")
@@ -303,6 +357,52 @@ func buildMessages(history []string) []claude.Message {
 		}
 	}
 	return msgs
+}
+
+func buildScheduleConfirmation(jobs []classifier.JobSpec) string {
+	if len(jobs) == 0 {
+		return "Got it — scheduled."
+	}
+	if len(jobs) == 1 {
+		j := jobs[0]
+		runAt := parseRunAt(j.RunAt)
+		delay := time.Until(runAt).Round(time.Second)
+		if delay < 0 {
+			delay = 0
+		}
+		if j.Recurrence != "" {
+			return fmt.Sprintf("Got it — I'll respond every %s, starting in ~%s.", j.Recurrence, delay)
+		}
+		return fmt.Sprintf("Got it — I'll respond in ~%s.", delay)
+	}
+	var sb strings.Builder
+	sb.WriteString("Got it — scheduled:\n")
+	for i, j := range jobs {
+		runAt := parseRunAt(j.RunAt)
+		delay := time.Until(runAt).Round(time.Second)
+		if delay < 0 {
+			delay = 0
+		}
+		if j.Recurrence != "" {
+			fmt.Fprintf(&sb, "%d. every %s, starting in ~%s\n", i+1, j.Recurrence, delay)
+		} else {
+			fmt.Fprintf(&sb, "%d. in ~%s\n", i+1, delay)
+		}
+	}
+	return sb.String()
+}
+
+func jobPromptPreview(j *jobs.Job) string {
+	var payload struct {
+		Prompt string `json:"prompt"`
+	}
+	if err := json.Unmarshal(j.Payload, &payload); err != nil || payload.Prompt == "" {
+		return j.JobType
+	}
+	if len(payload.Prompt) > 60 {
+		return payload.Prompt[:60] + "…"
+	}
+	return payload.Prompt
 }
 
 func parseRunAt(s string) time.Time {
@@ -436,6 +536,7 @@ type jobProcessor struct {
 	inboxItems inbox.Store
 	skills     *skills.Loader
 	jobStore   jobs.Store
+	clf        classifier.Classifier
 	logger     *slog.Logger
 }
 
@@ -465,24 +566,51 @@ func (p *jobProcessor) processSendMessage(job *jobs.Job) error {
 	}
 
 	history := recentHistory(ctx, p.logger, p.chats, job.AgentID, 20)
-	systemPrompt := buildSystemPrompt(ag.Soul, p.skills, nil)
-	msgs := buildMessages(history)
-	msgs = append(msgs, claude.Message{Role: "user", Content: payload.Prompt})
 
-	response, err := p.claude.Complete(ctx, systemPrompt, msgs)
+	// Classify the prompt — it may itself contain scheduling intent.
+	result, err := p.clf.Classify(ctx, ag.Soul, history, p.skills.Names(), payload.Prompt)
 	if err != nil {
-		return fmt.Errorf("claude complete: %w", err)
+		p.logger.Error("classify job prompt", "job_id", job.ID, "error", err)
+		result = &classifier.Result{ResponseType: "immediate"}
 	}
 
-	if _, err := p.chats.Add(job.AgentID, "assistant", response); err != nil {
-		p.logger.Error("persist assistant message", "error", err)
+	// Apply soul update if present.
+	if result.SoulUpdate != nil && *result.SoulUpdate != "" {
+		if err := p.agents.UpdateSoul(ag.ID, *result.SoulUpdate); err != nil {
+			p.logger.Error("update soul", "error", err)
+		}
 	}
 
-	if err := p.broker.Publish(job.AgentID, sse.Event{Type: "token", Content: response}); err != nil {
-		p.logger.Error("publish token", "error", err)
+	// Enqueue any new jobs the classifier found.
+	for _, js := range result.Jobs {
+		if _, err := p.jobStore.Enqueue(ag.ID, js.Type, js.Payload, parseRunAt(js.RunAt), js.Recurrence); err != nil {
+			p.logger.Error("enqueue job from prompt", "job_type", js.Type, "error", err)
+		}
 	}
-	if err := p.broker.Publish(job.AgentID, sse.Event{Type: "done"}); err != nil {
-		p.logger.Error("publish done", "error", err)
+
+	switch result.ResponseType {
+	case "scheduled", "scheduled_once", "scheduled_recurring":
+		// Jobs already enqueued above; nothing to stream.
+
+	default: // "immediate" or anything else → call Claude
+		systemPrompt := buildSystemPrompt(agentDisplayName(ag), ag.Soul, p.skills, result.RelevantSkillNames)
+		msgs := buildMessages(history)
+		msgs = append(msgs, claude.Message{Role: "user", Content: payload.Prompt})
+
+		response, err := p.claude.Complete(ctx, systemPrompt, msgs)
+		if err != nil {
+			return fmt.Errorf("claude complete: %w", err)
+		}
+
+		if _, err := p.chats.Add(job.AgentID, "assistant", response); err != nil {
+			p.logger.Error("persist assistant message", "error", err)
+		}
+		if err := p.broker.Publish(job.AgentID, sse.Event{Type: "token", Content: response}); err != nil {
+			p.logger.Error("publish token", "error", err)
+		}
+		if err := p.broker.Publish(job.AgentID, sse.Event{Type: "done"}); err != nil {
+			p.logger.Error("publish done", "error", err)
+		}
 	}
 
 	// Re-enqueue for recurring jobs.

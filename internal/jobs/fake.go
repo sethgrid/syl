@@ -62,6 +62,30 @@ func (f *FakeStore) MarkFailed(jobID int64) error {
 
 func (f *FakeStore) ResetStuck(_ time.Duration) (int, error) { return 0, nil }
 
+func (f *FakeStore) ListPending(agentID int64) ([]*Job, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []*Job
+	for _, j := range f.jobs {
+		if j.AgentID == agentID && j.Status == "pending" {
+			out = append(out, j)
+		}
+	}
+	return out, nil
+}
+
+func (f *FakeStore) Cancel(jobID int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, j := range f.jobs {
+		if j.ID == jobID && j.Status == "pending" {
+			j.Status = "failed"
+			return nil
+		}
+	}
+	return fmt.Errorf("job not found or already completed")
+}
+
 func (f *FakeStore) Close() error { return nil }
 
 func (f *FakeStore) setStatus(jobID int64, status string) error {

@@ -32,6 +32,29 @@ func TestClaudeClassifier_FallbackOnBadJSON(t *testing.T) {
 	assert.Equal(t, "immediate", result.ResponseType)
 }
 
+func TestClaudeClassifier_JobList(t *testing.T) {
+	resp, _ := json.Marshal(classifier.Result{ResponseType: "job_list"})
+	fake := &claude.FakeClient{Tokens: []string{string(resp)}}
+	clf := classifier.NewClaudeClassifier(fake, time.Now)
+
+	result, err := clf.Classify(context.Background(), "", nil, nil, "what tasks do I have scheduled?")
+	require.NoError(t, err)
+	assert.Equal(t, "job_list", result.ResponseType)
+}
+
+func TestClaudeClassifier_JobCancel(t *testing.T) {
+	id := int64(7)
+	resp, _ := json.Marshal(classifier.Result{ResponseType: "job_cancel", CancelJobID: &id})
+	fake := &claude.FakeClient{Tokens: []string{string(resp)}}
+	clf := classifier.NewClaudeClassifier(fake, time.Now)
+
+	result, err := clf.Classify(context.Background(), "", nil, nil, "cancel task 7")
+	require.NoError(t, err)
+	assert.Equal(t, "job_cancel", result.ResponseType)
+	require.NotNil(t, result.CancelJobID)
+	assert.Equal(t, int64(7), *result.CancelJobID)
+}
+
 func TestClaudeClassifier_ScheduledOnce(t *testing.T) {
 	runAt := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
 	resp, _ := json.Marshal(classifier.Result{

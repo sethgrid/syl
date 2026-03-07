@@ -7,9 +7,10 @@ import (
 // Result is the output of the pre-classifier call.
 type Result struct {
 	SoulUpdate         *string   `json:"soul_update"`
-	ResponseType       string    `json:"response_type"` // "immediate", "scheduled", "multi", "inbox_read"
+	ResponseType       string    `json:"response_type"` // "immediate", "scheduled_once", "scheduled_recurring", "inbox_read", "job_list", "job_cancel"
 	Jobs               []JobSpec `json:"jobs"`
 	RelevantSkillNames []string  `json:"relevant_skill_names"`
+	CancelJobID        *int64    `json:"cancel_job_id"` // populated for job_cancel response type
 }
 
 // JobSpec describes a job to enqueue.

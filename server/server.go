@@ -171,6 +171,7 @@ func (s *Server) Serve() error {
 		inboxItems: s.inboxItems,
 		skills:     s.skills,
 		jobStore:   s.jobStore,
+		clf:        s.clf,
 		logger:     s.parentLogger,
 	}
 	runner := jobs.NewRunner(s.jobStore, processor, s.parentLogger, 15*time.Second)
