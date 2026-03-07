@@ -50,11 +50,12 @@
   </div>
 
   <script>
-    // Named agent from URL: ?agent=<name>, default "syl".
-    const agentName = new URLSearchParams(window.location.search).get('agent') || 'syl';
+    // Named agent from URL: ?agent=<name>. Empty string = anonymous (fingerprint-isolated).
+    const agentName = new URLSearchParams(window.location.search).get('agent') || '';
+    const displayName = agentName || 'syl';
     function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
-    document.title = 'Syl · ' + cap(agentName);
-    document.getElementById('text-input').placeholder = 'Message ' + cap(agentName) + '\u2026';
+    document.title = 'Syl · ' + cap(displayName);
+    document.getElementById('text-input').placeholder = 'Message ' + cap(displayName) + '\u2026';
 
     // Persistent per-browser identity.
     // crypto.randomUUID() requires HTTPS in Safari — use a manual fallback for HTTP LAN.
@@ -244,7 +245,9 @@
     async function init() {
       try {
         dbg('fetching session fp=' + fingerprint.slice(0,8) + '…');
-        const res = await fetch('/session?fingerprint=' + encodeURIComponent(fingerprint) + '&name=' + encodeURIComponent(agentName));
+        const sessionURL = '/session?fingerprint=' + encodeURIComponent(fingerprint) +
+          (agentName ? '&name=' + encodeURIComponent(agentName) : '');
+        const res = await fetch(sessionURL);
         if (!res.ok) throw new Error('session ' + res.status);
         const data = await res.json();
         agentID = data.agent_id;
@@ -266,7 +269,7 @@
       const res = await fetch('/message', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, fingerprint, agent_name: agentName }),
+        body: JSON.stringify({ text, fingerprint, ...(agentName ? { agent_name: agentName } : {}) }),
       });
       if (!res.ok) {
         appendMsg('assistant', '[error] message failed (' + res.status + ')');
