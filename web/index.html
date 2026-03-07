@@ -11,6 +11,23 @@
     .msg { max-width: 70%; padding: 0.6rem 1rem; border-radius: 1rem; line-height: 1.5; }
     .msg.user { background: #1e3a5f; align-self: flex-end; border-bottom-right-radius: 0.25rem; }
     .msg.assistant { background: #1a1a1a; align-self: flex-start; border-bottom-left-radius: 0.25rem; }
+    /* Markdown rendering inside assistant bubbles */
+    .msg.assistant h1, .msg.assistant h2, .msg.assistant h3 { margin: 0.5rem 0 0.25rem; font-weight: 600; }
+    .msg.assistant h1 { font-size: 1.2em; }
+    .msg.assistant h2 { font-size: 1.1em; }
+    .msg.assistant h3 { font-size: 1em; }
+    .msg.assistant p { margin: 0.25rem 0; }
+    .msg.assistant p:first-child { margin-top: 0; }
+    .msg.assistant p:last-child { margin-bottom: 0; }
+    .msg.assistant ul, .msg.assistant ol { margin: 0.25rem 0 0.25rem 1.25rem; }
+    .msg.assistant li { margin: 0.1rem 0; }
+    .msg.assistant pre { background: #0a0a0a; border: 1px solid #2a2a2a; border-radius: 0.4rem; padding: 0.6rem 0.8rem; margin: 0.4rem 0; overflow-x: auto; }
+    .msg.assistant code { font-family: 'Menlo', 'Monaco', monospace; font-size: 0.85em; }
+    .msg.assistant pre code { background: none; padding: 0; }
+    .msg.assistant :not(pre) > code { background: #2a2a2a; padding: 0.1em 0.35em; border-radius: 0.25rem; }
+    .msg.assistant strong { font-weight: 600; }
+    .msg.assistant em { font-style: italic; }
+    .msg.assistant hr { border: none; border-top: 1px solid #333; margin: 0.5rem 0; }
     #status { font-size: 0.75rem; color: #555; text-align: center; padding: 0.25rem; cursor: pointer; }
     #input-row { display: flex; gap: 0.5rem; padding: 1rem 1.5rem; border-top: 1px solid #222; background: #0f0f0f; }
     #text-input { flex: 1; background: #1a1a1a; border: 1px solid #333; border-radius: 0.5rem; color: #e0e0e0; padding: 0.6rem 1rem; font-size: 1rem; }
@@ -83,10 +100,78 @@
       inputEl.focus();
     }
 
+    // Minimal markdown → HTML renderer (no dependencies, LAN-safe).
+    // Handles the subset Claude typically produces.
+    function esc(s) {
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function mdToHtml(raw) {
+      // Protect code blocks from inline transforms.
+      const blocks = [];
+      let s = raw.replace(/```(?:[^\n]*\n)?([\s\S]*?)```/g, (_, code) => {
+        blocks.push('<pre><code>' + esc(code.replace(/\n$/, '')) + '</code></pre>');
+        return '\x00' + (blocks.length - 1) + '\x00';
+      });
+
+      // Inline code.
+      s = s.replace(/`([^`\n]+)`/g, (_, c) => '<code>' + esc(c) + '</code>');
+
+      // Headers.
+      s = s.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+      s = s.replace(/^## (.+)$/gm,  '<h2>$1</h2>');
+      s = s.replace(/^# (.+)$/gm,   '<h1>$1</h1>');
+
+      // Horizontal rule.
+      s = s.replace(/^[-*_]{3,}$/gm, '<hr>');
+
+      // Bold + italic, bold, italic.
+      s = s.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+      s = s.replace(/\*\*(.+?)\*\*/g,     '<strong>$1</strong>');
+      s = s.replace(/\*(.+?)\*/g,         '<em>$1</em>');
+
+      // Lists — collect consecutive items then wrap.
+      s = s.replace(/((?:^[ \t]*[-*] .+(?:\n|$))+)/gm, m => {
+        const items = m.trim().split('\n')
+          .map(l => '<li>' + l.replace(/^[ \t]*[-*] /, '') + '</li>')
+          .join('');
+        return '<ul>' + items + '</ul>\n';
+      });
+      s = s.replace(/((?:^[ \t]*\d+\. .+(?:\n|$))+)/gm, m => {
+        const items = m.trim().split('\n')
+          .map(l => '<li>' + l.replace(/^[ \t]*\d+\. /, '') + '</li>')
+          .join('');
+        return '<ol>' + items + '</ol>\n';
+      });
+
+      // Wrap remaining plain-text lines in <p>, collapsing blank lines.
+      const blockTags = /^<(h[1-3]|ul|ol|pre|hr|p)/;
+      const out = [];
+      let para = [];
+      for (const line of s.split('\n')) {
+        if (line.trim() === '') {
+          if (para.length) { out.push('<p>' + para.join('<br>') + '</p>'); para = []; }
+        } else if (blockTags.test(line.trim()) || line.startsWith('\x00')) {
+          if (para.length) { out.push('<p>' + para.join('<br>') + '</p>'); para = []; }
+          out.push(line);
+        } else {
+          para.push(line);
+        }
+      }
+      if (para.length) out.push('<p>' + para.join('<br>') + '</p>');
+
+      // Restore code blocks.
+      return out.join('\n').replace(/\x00(\d+)\x00/g, (_, i) => blocks[+i]);
+    }
+
     function appendMsg(role, text) {
       const el = document.createElement('div');
       el.className = 'msg ' + role;
-      el.textContent = text;
+      if (role === 'assistant') {
+        el.innerHTML = mdToHtml(text);
+      } else {
+        el.textContent = text;
+      }
       document.getElementById('chat').appendChild(el);
       el.scrollIntoView({ behavior: 'smooth' });
       return el;
@@ -97,8 +182,6 @@
       dbg('EventSource opening agent_id=' + aid);
       eventSource = new EventSource('/sse?agent_id=' + aid);
 
-      // onopen fires on desktop browsers when HTTP 200 headers arrive.
-      // iOS Safari often skips it — we also listen for the named 'ready' event.
       eventSource.onopen = () => {
         dbg('onopen fired readyState=' + eventSource.readyState);
         setStatus('connected');
@@ -111,7 +194,7 @@
         enable();
       });
 
-      eventSource.onerror = (e) => {
+      eventSource.onerror = () => {
         dbg('onerror readyState=' + eventSource.readyState, true);
         setStatus('reconnecting…');
         inputEl.disabled = true;
@@ -122,8 +205,14 @@
         dbg('message: ' + e.data.slice(0, 60));
         const evt = JSON.parse(e.data);
         if (evt.type === 'token') {
-          if (!currentMsg) currentMsg = appendMsg('assistant', '');
-          currentMsg.textContent += evt.content;
+          if (!currentMsg) {
+            currentMsg = document.createElement('div');
+            currentMsg.className = 'msg assistant';
+            currentMsg.dataset.raw = '';
+            document.getElementById('chat').appendChild(currentMsg);
+          }
+          currentMsg.dataset.raw += evt.content;
+          currentMsg.innerHTML = mdToHtml(currentMsg.dataset.raw);
           currentMsg.scrollIntoView({ behavior: 'smooth' });
         } else if (evt.type === 'done') {
           currentMsg = null;
