@@ -173,3 +173,55 @@ func TestInboxListEmpty(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
+
+// TestHistory (Unit A): POST /message → GET /history → non-empty, first item role="user".
+func TestHistory(t *testing.T) {
+	fake := &claude.FakeClient{Tokens: []string{"Hi there!"}}
+	_, port := startServer(t, server.WithClaude(fake))
+
+	body, _ := json.Marshal(map[string]string{
+		"text":        "hello history",
+		"fingerprint": "fp-history-test",
+	})
+	resp, err := http.Post(
+		fmt.Sprintf("http://localhost:%d/message", port),
+		"application/json", bytes.NewReader(body))
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusAccepted, resp.StatusCode)
+	resp.Body.Close()
+
+	time.Sleep(100 * time.Millisecond)
+
+	histResp, err := http.Get(fmt.Sprintf("http://localhost:%d/history?agent_id=1", port))
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, histResp.StatusCode)
+	defer histResp.Body.Close()
+
+	var items []struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
+	require.NoError(t, json.NewDecoder(histResp.Body).Decode(&items))
+	assert.NotEmpty(t, items)
+	assert.Equal(t, "user", items[0].Role)
+}
+
+// TestNamedAgent (Unit B): two sessions with same ?name=syl get the same agent_id.
+func TestNamedAgent(t *testing.T) {
+	_, port := startServer(t)
+
+	getAgentID := func(fp string) int64 {
+		resp, err := http.Get(fmt.Sprintf("http://localhost:%d/session?fingerprint=%s&name=syl", port, fp))
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		var data struct {
+			AgentID int64 `json:"agent_id"`
+		}
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&data))
+		return data.AgentID
+	}
+
+	id1 := getAgentID("fp-named-a")
+	id2 := getAgentID("fp-named-b")
+	assert.Equal(t, id1, id2, "same named agent should return same agent_id")
+}

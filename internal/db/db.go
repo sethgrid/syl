@@ -30,8 +30,14 @@ func Open(path string) (*sql.DB, error) {
 }
 
 func migrate(db *sql.DB) error {
-	_, err := db.Exec(schema)
-	return err
+	if _, err := db.Exec(schema); err != nil {
+		return err
+	}
+	_, _ = db.Exec(`ALTER TABLE jobs ADD COLUMN recurrence TEXT NOT NULL DEFAULT ''`)
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS agents_name_unique ON agents (name) WHERE name IS NOT NULL`); err != nil {
+		return fmt.Errorf("agents_name_unique index: %w", err)
+	}
+	return nil
 }
 
 const schema = `

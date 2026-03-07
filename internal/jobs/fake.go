@@ -17,18 +17,19 @@ func NewFakeStore() *FakeStore {
 	return &FakeStore{next: 1}
 }
 
-func (f *FakeStore) Enqueue(agentID int64, jobType string, payload any, runAt time.Time) (*Job, error) {
+func (f *FakeStore) Enqueue(agentID int64, jobType string, payload any, runAt time.Time, recurrence string) (*Job, error) {
 	data, _ := json.Marshal(payload)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	j := &Job{
-		ID:        f.next,
-		AgentID:   agentID,
-		JobType:   jobType,
-		Payload:   data,
-		Status:    "pending",
-		RunAt:     runAt,
-		CreatedAt: time.Now(),
+		ID:         f.next,
+		AgentID:    agentID,
+		JobType:    jobType,
+		Payload:    data,
+		Status:     "pending",
+		RunAt:      runAt,
+		Recurrence: recurrence,
+		CreatedAt:  time.Now(),
 	}
 	f.next++
 	f.jobs = append(f.jobs, j)
@@ -60,6 +61,30 @@ func (f *FakeStore) MarkFailed(jobID int64) error {
 }
 
 func (f *FakeStore) ResetStuck(_ time.Duration) (int, error) { return 0, nil }
+
+func (f *FakeStore) ListPending(agentID int64) ([]*Job, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []*Job
+	for _, j := range f.jobs {
+		if j.AgentID == agentID && j.Status == "pending" {
+			out = append(out, j)
+		}
+	}
+	return out, nil
+}
+
+func (f *FakeStore) Cancel(jobID int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, j := range f.jobs {
+		if j.ID == jobID && j.Status == "pending" {
+			j.Status = "failed"
+			return nil
+		}
+	}
+	return fmt.Errorf("job not found or already completed")
+}
 
 func (f *FakeStore) Close() error { return nil }
 

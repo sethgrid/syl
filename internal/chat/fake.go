@@ -44,3 +44,29 @@ func (f *FakeStore) Recent(agentID int64, limit int) ([]Message, error) {
 	}
 	return out, nil
 }
+
+func (f *FakeStore) History(agentID int64, tokenBudget, maxMsgs int) ([]Message, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var all []Message
+	for _, m := range f.msgs {
+		if m.AgentID == agentID {
+			all = append(all, m)
+		}
+	}
+	// Accumulate newest-first within budget.
+	var out []Message
+	tokensUsed := 0
+	for i := len(all) - 1; i >= 0 && len(out) < maxMsgs; i-- {
+		tokensUsed += len(all[i].Content) / 4
+		if tokensUsed > tokenBudget {
+			break
+		}
+		out = append(out, all[i])
+	}
+	// Reverse to chronological.
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out, nil
+}

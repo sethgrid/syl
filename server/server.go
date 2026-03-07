@@ -71,7 +71,7 @@ func New(conf Config) (*Server, error) {
 		inboxItems:   inbox.NewSQLiteStore(sqlDB),
 		jobStore:     jobs.NewSQLiteStore(sqlDB),
 		broker:       sse.NewBroker(sqlDB),
-		clf:          &classifier.FakeClassifier{}, // replaced in Epic 4
+		clf:          classifier.NewClaudeClassifier(claudeClient, time.Now),
 		claude:       claudeClient,
 		skills:       skills.NewLoader(conf.SkillsDir, conf.Debug),
 		parentLogger: rootLogger,
@@ -122,6 +122,7 @@ func (s *Server) Serve() error {
 
 	router.With(withTimeout).Get("/", handleIndex())
 	router.With(withTimeout).Get("/session", handleSession(s.agents))
+	router.With(withTimeout).Get("/history", handleHistory(s.chats))
 	// SSE must NOT have a request timeout
 	router.Get("/sse", handleSSE(s.broker))
 	router.With(withTimeout).Post("/message", handleMessage(
@@ -168,6 +169,9 @@ func (s *Server) Serve() error {
 		agents:     s.agents,
 		chats:      s.chats,
 		inboxItems: s.inboxItems,
+		skills:     s.skills,
+		jobStore:   s.jobStore,
+		clf:        s.clf,
 		logger:     s.parentLogger,
 	}
 	runner := jobs.NewRunner(s.jobStore, processor, s.parentLogger, 15*time.Second)
