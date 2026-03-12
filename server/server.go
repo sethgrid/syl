@@ -167,16 +167,16 @@ func (s *Server) Serve() error {
 	}()
 
 	processor := &jobProcessor{
-		claude:               s.claude,
-		broker:               s.broker,
-		agents:               s.agents,
-		chats:                s.chats,
-		inboxItems:           s.inboxItems,
-		skills:               s.skills,
-		jobStore:             s.jobStore,
-		clf:                  s.clf,
-		logger:               s.parentLogger,
-		compactionThreshold:  s.compactionThreshold,
+		claude:              s.claude,
+		broker:              s.broker,
+		agents:              s.agents,
+		chats:               s.chats,
+		inboxItems:          s.inboxItems,
+		skills:              s.skills,
+		jobStore:            s.jobStore,
+		clf:                 s.clf,
+		logger:              s.parentLogger,
+		compactionThreshold: s.compactionThreshold,
 	}
 	runner := jobs.NewRunner(s.jobStore, processor, s.parentLogger, 15*time.Second)
 	s.mu.Lock()
