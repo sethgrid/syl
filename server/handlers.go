@@ -101,6 +101,7 @@ func handleChat(
 	chats chat.Store,
 	cl claude.Client,
 	sk *skills.Loader,
+	historyLimit int,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		log := logger.FromRequest(r)
@@ -124,7 +125,7 @@ func handleChat(
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		history := recentHistory(r.Context(), log, chats, ag.ID, 20)
+		history := compactionAwareHistory(r.Context(), log, chats, ag.ID, historyLimit)
 		response, err := cl.Complete(r.Context(), buildSystemPrompt(agentDisplayName(ag), ag.Soul, sk, nil), buildMessages(history))
 		if err != nil {
 			log.Error("claude complete", "error", err)
@@ -154,6 +155,8 @@ func handleMessage(
 	inbx inbox.Store,
 	jobStore jobs.Store,
 	compactionThreshold int,
+	asyncTimeout time.Duration,
+	historyLimit int,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		log := logger.FromRequest(r)
@@ -186,10 +189,12 @@ func handleMessage(
 		w.WriteHeader(http.StatusAccepted)
 
 		// 3. Run pipeline asynchronously so HTTP response is returned immediately.
-		// Use context.Background() — r.Context() is canceled when the handler returns,
-		// which would kill the in-flight Claude stream.
+		// Use a fresh context with a hard deadline — r.Context() is canceled when the
+		// handler returns, but context.Background() with no deadline risks goroutine leaks
+		// if Claude hangs.
 		go func() {
-			ctx := context.Background()
+			ctx, cancel := context.WithTimeout(context.Background(), asyncTimeout)
+			defer cancel()
 
 			publish := func(evt sse.Event) {
 				if err := broker.Publish(ag.ID, evt); err != nil {
@@ -199,15 +204,11 @@ func handleMessage(
 			persistAssistant := func(content string) {
 				if _, err := chats.Add(ag.ID, "assistant", content); err != nil {
 					log.Error("persist assistant message", "error", err)
-					return
-				}
-				if compactionThreshold > 0 {
-					go maybeCompact(context.Background(), log, chats, cl, ag.ID, agentDisplayName(ag), compactionThreshold)
 				}
 			}
 
 			// 4. Pre-classify.
-			history := compactionAwareHistory(ctx, log, chats, ag.ID, 20)
+			history := compactionAwareHistory(ctx, log, chats, ag.ID, historyLimit)
 			result, err := clf.Classify(ctx, ag.Soul, history, sk.Names(), req.Text)
 			if err != nil {
 				log.Error("classify", "error", err)
@@ -229,6 +230,8 @@ func handleMessage(
 				}
 			}
 
+			var assistantResponse string
+
 			switch result.ResponseType {
 			case "inbox_read":
 				items, err := inbx.ListOpen()
@@ -248,13 +251,13 @@ func handleMessage(
 				}
 				publish(sse.Event{Type: "token", Content: sb.String()})
 				publish(sse.Event{Type: "done"})
-				persistAssistant(sb.String())
+				assistantResponse = sb.String()
 
 			case "scheduled", "scheduled_once", "scheduled_recurring":
 				msg := buildScheduleConfirmation(result.Jobs)
 				publish(sse.Event{Type: "token", Content: msg})
 				publish(sse.Event{Type: "done"})
-				persistAssistant(msg)
+				assistantResponse = msg
 
 			case "job_list":
 				pending, err := jobStore.ListPending(ag.ID)
@@ -279,7 +282,7 @@ func handleMessage(
 				}
 				publish(sse.Event{Type: "token", Content: sb.String()})
 				publish(sse.Event{Type: "done"})
-				persistAssistant(sb.String())
+				assistantResponse = sb.String()
 
 			case "job_cancel":
 				var msg string
@@ -294,7 +297,7 @@ func handleMessage(
 				}
 				publish(sse.Event{Type: "token", Content: msg})
 				publish(sse.Event{Type: "done"})
-				persistAssistant(msg)
+				assistantResponse = msg
 
 			default: // "immediate" or anything unknown
 				systemPrompt := buildSystemPrompt(agentDisplayName(ag), ag.Soul, sk, result.RelevantSkillNames)
@@ -309,8 +312,15 @@ func handleMessage(
 					return
 				}
 				publish(sse.Event{Type: "done"})
-				if full != "" {
-					persistAssistant(full)
+				assistantResponse = full
+			}
+
+			// Persist and maybe compact — runs once, sequentially, in the same goroutine.
+			// No inner goroutine needed: the user already has their response via SSE.
+			if assistantResponse != "" {
+				persistAssistant(assistantResponse)
+				if compactionThreshold > 0 {
+					maybeCompact(ctx, log, chats, cl, ag.ID, agentDisplayName(ag), compactionThreshold)
 				}
 			}
 		}()
@@ -383,10 +393,8 @@ func maybeCompact(ctx context.Context, log *slog.Logger, chats chat.Store, cl cl
 	for _, m := range msgs {
 		fmt.Fprintf(&sb, "%s: %s\n", m.Role, m.Content)
 	}
-	prompt := fmt.Sprintf(
-		"Summarize the following conversation compactly. Preserve key facts, preferences, decisions, and context that would be important for %s's future interactions with the user.\n\n%s",
-		agentName, sb.String())
-	summaryText, err := cl.Complete(ctx, "You are a conversation summarizer. Be concise and factual.", []claude.Message{{Role: "user", Content: prompt}})
+	prompt := fmt.Sprintf(compactionUserPromptTmpl, agentName, sb.String())
+	summaryText, err := cl.Complete(ctx, compactionSystemPrompt, []claude.Message{{Role: "user", Content: prompt}})
 	if err != nil {
 		log.Error("compaction: claude call", "error", err)
 		return
@@ -480,8 +488,9 @@ func jobPromptPreview(j *jobs.Job) string {
 	if err := json.Unmarshal(j.Payload, &payload); err != nil || payload.Prompt == "" {
 		return j.JobType
 	}
-	if len(payload.Prompt) > 60 {
-		return payload.Prompt[:60] + "…"
+	runes := []rune(payload.Prompt)
+	if len(runes) > 60 {
+		return string(runes[:60]) + "…"
 	}
 	return payload.Prompt
 }
@@ -561,7 +570,6 @@ func handleInboxAnswer(inbx inbox.Store) http.HandlerFunc {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		w.WriteHeader(http.StatusOK)
 	}
 }
 
@@ -608,18 +616,26 @@ func handlePutSoul(agents agent.Store) http.HandlerFunc {
 	}
 }
 
+// compactionSystemPrompt and compactionUserPromptTmpl control the summarization
+// call made by maybeCompact. Kept as constants so they're easy to find and tune.
+const (
+	compactionSystemPrompt   = "You are a conversation summarizer. Be concise and factual."
+	compactionUserPromptTmpl = "Summarize the following conversation compactly. Preserve key facts, preferences, decisions, and context that would be important for %s's future interactions with the user.\n\n%s"
+)
+
 // jobProcessor implements jobs.Processor for the server.
 type jobProcessor struct {
-	claude               claude.Client
-	broker               *sse.Broker
-	agents               agent.Store
-	chats                chat.Store
-	inboxItems           inbox.Store
-	skills               *skills.Loader
-	jobStore             jobs.Store
-	clf                  classifier.Classifier
-	logger               *slog.Logger
-	compactionThreshold  int
+	claude              claude.Client
+	broker              *sse.Broker
+	agents              agent.Store
+	chats               chat.Store
+	inboxItems          inbox.Store
+	skills              *skills.Loader
+	jobStore            jobs.Store
+	clf                 classifier.Classifier
+	logger              *slog.Logger
+	compactionThreshold int
+	historyLimit        int
 }
 
 func (p *jobProcessor) Process(job *jobs.Job) error {
@@ -654,7 +670,7 @@ func (p *jobProcessor) processSendMessage(job *jobs.Job) error {
 		return fmt.Errorf("get agent: %w", err)
 	}
 
-	history := compactionAwareHistory(ctx, p.logger, p.chats, job.AgentID, 20)
+	history := compactionAwareHistory(ctx, p.logger, p.chats, job.AgentID, p.historyLimit)
 
 	// Classify the prompt — it may itself contain scheduling intent.
 	result, err := p.clf.Classify(ctx, ag.Soul, history, p.skills.Names(), payload.Prompt)
@@ -694,7 +710,7 @@ func (p *jobProcessor) processSendMessage(job *jobs.Job) error {
 		if _, err := p.chats.Add(job.AgentID, "assistant", response); err != nil {
 			p.logger.Error("persist assistant message", "error", err)
 		} else if p.compactionThreshold > 0 {
-			go maybeCompact(context.Background(), p.logger, p.chats, p.claude, job.AgentID, agentDisplayName(ag), p.compactionThreshold)
+			maybeCompact(ctx, p.logger, p.chats, p.claude, job.AgentID, agentDisplayName(ag), p.compactionThreshold)
 		}
 		if err := p.broker.Publish(job.AgentID, sse.Event{Type: "token", Content: response}); err != nil {
 			p.logger.Error("publish token", "error", err)

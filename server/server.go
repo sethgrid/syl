@@ -40,7 +40,8 @@ type Server struct {
 	clf                  classifier.Classifier
 	claude               claude.Client
 	skills               *skills.Loader
-	compactionThreshold  int
+	compactionThreshold int
+	historyLimit        int
 
 	mu                 sync.Mutex
 	started            bool
@@ -76,6 +77,7 @@ func New(conf Config) (*Server, error) {
 		claude:              newMetricsClient(claudeClient, "response"),
 		skills:              skills.NewLoader(conf.SkillsDir, conf.Debug),
 		compactionThreshold: conf.CompactionThreshold,
+		historyLimit:        conf.HistoryLimit,
 		parentLogger:        rootLogger,
 	}, nil
 }
@@ -105,6 +107,7 @@ func NewTest(conf Config, opts ...Option) *Server {
 		claude:              &claude.FakeClient{},
 		skills:              skills.NewLoader("", false),
 		compactionThreshold: conf.CompactionThreshold,
+		historyLimit:        conf.HistoryLimit,
 		parentLogger:        logger.New(),
 	}
 	for _, opt := range opts {
@@ -129,10 +132,10 @@ func (s *Server) Serve() error {
 	// SSE must NOT have a request timeout
 	router.Get("/sse", handleSSE(s.broker, sseActiveConns))
 	router.With(withTimeout).Post("/message", handleMessage(
-		s.agents, s.chats, s.broker, s.clf, s.claude, s.skills, s.inboxItems, s.jobStore, s.compactionThreshold,
+		s.agents, s.chats, s.broker, s.clf, s.claude, s.skills, s.inboxItems, s.jobStore, s.compactionThreshold, s.config.AsyncTimeout, s.historyLimit,
 	))
 	router.With(withTimeout).Post("/chat", handleChat(
-		s.agents, s.chats, s.claude, s.skills,
+		s.agents, s.chats, s.claude, s.skills, s.historyLimit,
 	))
 	router.With(withTimeout).Get("/inbox", handleInboxList(s.inboxItems))
 	router.With(withTimeout).Post("/inbox/{id}/answer", handleInboxAnswer(s.inboxItems))
@@ -177,6 +180,7 @@ func (s *Server) Serve() error {
 		clf:                 s.clf,
 		logger:              s.parentLogger,
 		compactionThreshold: s.compactionThreshold,
+		historyLimit:        s.historyLimit,
 	}
 	runner := jobs.NewRunner(s.jobStore, processor, s.parentLogger, 15*time.Second)
 	s.mu.Lock()
@@ -260,6 +264,12 @@ func (s *Server) LastError() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.srvErr
+}
+
+// SubscriberCount returns the number of active SSE subscribers for agentID.
+// Exposed for tests to poll instead of sleeping.
+func (s *Server) SubscriberCount(agentID int64) int {
+	return s.broker.SubscriberCount(agentID)
 }
 
 func (s *Server) setLastError(err error) {

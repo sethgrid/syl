@@ -102,8 +102,11 @@ func TestMessageIntegration(t *testing.T) {
 		}
 	}()
 
-	// Small delay so SSE subscription is registered.
-	time.Sleep(100 * time.Millisecond)
+	// Poll until the SSE subscription is registered in the broker.
+	// Avoids a fixed sleep that can flake on slow CI machines.
+	require.Eventually(t, func() bool {
+		return srv.SubscriberCount(agentID) > 0
+	}, 5*time.Second, 10*time.Millisecond, "SSE subscription not registered in time")
 
 	// POST a message.
 	body, _ := json.Marshal(map[string]string{

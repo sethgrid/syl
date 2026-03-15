@@ -2,6 +2,7 @@ package chat
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -77,7 +78,7 @@ func (s *SQLiteStore) LatestSummary(agentID int64) (*Message, error) {
 		 WHERE agent_id = ? AND role = 'summary' ORDER BY id DESC LIMIT 1`, agentID)
 	var m Message
 	if err := row.Scan(&m.ID, &m.AgentID, &m.Role, &m.Content, &m.CreatedAt); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err
@@ -136,7 +137,7 @@ func (s *SQLiteStore) History(agentID int64, tokenBudget, maxMsgs int) ([]Messag
 		if err := rows.Scan(&m.ID, &m.AgentID, &m.Role, &m.Content, &m.CreatedAt); err != nil {
 			return nil, err
 		}
-		tokensUsed += len(m.Content) / 4
+		tokensUsed += len(m.Content) / 4 // rough approximation: ~4 bytes per token for English; less accurate for CJK
 		if tokensUsed > tokenBudget {
 			break
 		}

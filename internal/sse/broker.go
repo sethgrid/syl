@@ -132,6 +132,13 @@ func (b *Broker) Subscribe(agentID int64, w http.ResponseWriter, r *http.Request
 	}
 }
 
+// SubscriberCount returns the number of active SSE subscribers for agentID.
+func (b *Broker) SubscriberCount(agentID int64) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.subs[agentID])
+}
+
 func (b *Broker) drainPending(agentID int64, w http.ResponseWriter, flusher http.Flusher) {
 	if b.db == nil {
 		return

@@ -13,6 +13,8 @@ type Config struct {
 	Debug                bool          `env:"SYL_DEBUG"                 envDefault:"false"`
 	SkillsDir            string        `env:"SYL_SKILLS_DIR"            envDefault:"skills"`
 	RequestTimeout       time.Duration `env:"SYL_REQUEST_TIMEOUT"       envDefault:"30s"`
+	AsyncTimeout         time.Duration `env:"SYL_ASYNC_TIMEOUT"         envDefault:"60s"`
 	ShutdownTimeout      time.Duration `env:"SYL_SHUTDOWN_TIMEOUT"      envDefault:"30s"`
 	CompactionThreshold  int           `env:"SYL_COMPACTION_THRESHOLD"  envDefault:"50"`
+	HistoryLimit         int           `env:"SYL_HISTORY_LIMIT"         envDefault:"20"`
 }

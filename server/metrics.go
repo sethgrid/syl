@@ -83,14 +83,18 @@ func (m *metricsClient) Complete(ctx context.Context, systemPrompt string, messa
 func httpMetricsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		sw := &statusWriter{ResponseWriter: w}
 		next.ServeHTTP(sw, r)
 
 		path := chi.RouteContext(r.Context()).RoutePattern()
 		if path == "" {
 			path = "unknown"
 		}
-		status := strconv.Itoa(sw.status)
+		code := sw.status
+		if code == 0 {
+			code = http.StatusOK
+		}
+		status := strconv.Itoa(code)
 		httpRequestsTotal.WithLabelValues(r.Method, path, status).Inc()
 		httpRequestDuration.WithLabelValues(r.Method, path).Observe(time.Since(start).Seconds())
 	})
@@ -106,6 +110,13 @@ type statusWriter struct {
 func (sw *statusWriter) WriteHeader(status int) {
 	sw.status = status
 	sw.ResponseWriter.WriteHeader(status)
+}
+
+func (sw *statusWriter) Write(b []byte) (int, error) {
+	if sw.status == 0 {
+		sw.status = http.StatusOK
+	}
+	return sw.ResponseWriter.Write(b)
 }
 
 func (sw *statusWriter) Flush() {
