@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,11 +11,12 @@ import (
 // Skills are Markdown files in the skills directory.
 // Dev skills (skills/dev/) are loaded only when debug=true.
 type Loader struct {
+	dir    string
 	skills map[string]string // name → content
 }
 
 func NewLoader(dir string, debug bool) *Loader {
-	l := &Loader{skills: make(map[string]string)}
+	l := &Loader{dir: dir, skills: make(map[string]string)}
 	if dir == "" {
 		return l
 	}
@@ -55,6 +57,20 @@ func (l *Loader) Names() []string {
 // Get returns the content of a skill by name, or empty string if not found.
 func (l *Loader) Get(name string) string {
 	return l.skills[name]
+}
+
+// Write saves a skill to disk and updates the in-memory map.
+// Returns an error if no directory was configured.
+func (l *Loader) Write(name, content string) error {
+	if l.dir == "" {
+		return fmt.Errorf("skills: no directory configured")
+	}
+	path := filepath.Join(l.dir, name+".md")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("write skill %q: %w", name, err)
+	}
+	l.skills[name] = content
+	return nil
 }
 
 // GetMany returns the content of multiple skills, joined with a separator.

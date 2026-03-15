@@ -45,6 +45,45 @@ func (f *FakeStore) Recent(agentID int64, limit int) ([]Message, error) {
 	return out, nil
 }
 
+func (f *FakeStore) LatestSummary(agentID int64) (*Message, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := len(f.msgs) - 1; i >= 0; i-- {
+		if f.msgs[i].AgentID == agentID && f.msgs[i].Role == "summary" {
+			m := f.msgs[i]
+			return &m, nil
+		}
+	}
+	return nil, nil
+}
+
+func (f *FakeStore) CountSince(agentID int64, afterID int64) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, m := range f.msgs {
+		if m.AgentID == agentID && m.Role != "summary" && m.ID > afterID {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (f *FakeStore) Since(agentID int64, afterID int64, limit int) ([]Message, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []Message
+	for _, m := range f.msgs {
+		if m.AgentID == agentID && m.Role != "summary" && m.ID > afterID {
+			out = append(out, m)
+			if limit > 0 && len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
 func (f *FakeStore) History(agentID int64, tokenBudget, maxMsgs int) ([]Message, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

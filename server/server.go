@@ -31,15 +31,17 @@ import (
 
 // Server is the Syl HTTP server.
 type Server struct {
-	config     Config
-	agents     agent.Store
-	chats      chat.Store
-	inboxItems inbox.Store
-	jobStore   jobs.Store
-	broker     *sse.Broker
-	clf        classifier.Classifier
-	claude     claude.Client
-	skills     *skills.Loader
+	config               Config
+	agents               agent.Store
+	chats                chat.Store
+	inboxItems           inbox.Store
+	jobStore             jobs.Store
+	broker               *sse.Broker
+	clf                  classifier.Classifier
+	claude               claude.Client
+	skills               *skills.Loader
+	compactionThreshold int
+	historyLimit        int
 
 	mu                 sync.Mutex
 	started            bool
@@ -64,17 +66,19 @@ func New(conf Config) (*Server, error) {
 	claudeClient := claude.New(conf.AnthropicAPIKey)
 
 	return &Server{
-		config:       conf,
-		port:         conf.Port,
-		agents:       agent.NewSQLiteStore(sqlDB),
-		chats:        chat.NewSQLiteStore(sqlDB),
-		inboxItems:   inbox.NewSQLiteStore(sqlDB),
-		jobStore:     jobs.NewSQLiteStore(sqlDB),
-		broker:       sse.NewBroker(sqlDB),
-		clf:          classifier.NewClaudeClassifier(claudeClient, time.Now),
-		claude:       claudeClient,
-		skills:       skills.NewLoader(conf.SkillsDir, conf.Debug),
-		parentLogger: rootLogger,
+		config:              conf,
+		port:                conf.Port,
+		agents:              agent.NewSQLiteStore(sqlDB),
+		chats:               chat.NewSQLiteStore(sqlDB),
+		inboxItems:          inbox.NewSQLiteStore(sqlDB),
+		jobStore:            jobs.NewSQLiteStore(sqlDB),
+		broker:              sse.NewBroker(sqlDB),
+		clf:                 classifier.NewClaudeClassifier(newMetricsClient(claudeClient, "classifier"), time.Now),
+		claude:              newMetricsClient(claudeClient, "response"),
+		skills:              skills.NewLoader(conf.SkillsDir, conf.Debug),
+		compactionThreshold: conf.CompactionThreshold,
+		historyLimit:        conf.HistoryLimit,
+		parentLogger:        rootLogger,
 	}, nil
 }
 
@@ -92,17 +96,19 @@ func WithLogger(l *slog.Logger) Option                 { return func(srv *Server
 // NewTest creates a server wired with in-memory fakes for testing.
 func NewTest(conf Config, opts ...Option) *Server {
 	srv := &Server{
-		config:       conf,
-		port:         conf.Port,
-		agents:       agent.NewFakeStore(),
-		chats:        chat.NewFakeStore(),
-		inboxItems:   inbox.NewFakeStore(),
-		jobStore:     jobs.NewFakeStore(),
-		broker:       sse.NewBroker(nil),
-		clf:          &classifier.FakeClassifier{},
-		claude:       &claude.FakeClient{},
-		skills:       skills.NewLoader("", false),
-		parentLogger: logger.New(),
+		config:              conf,
+		port:                conf.Port,
+		agents:              agent.NewFakeStore(),
+		chats:               chat.NewFakeStore(),
+		inboxItems:          inbox.NewFakeStore(),
+		jobStore:            jobs.NewFakeStore(),
+		broker:              sse.NewBroker(nil),
+		clf:                 &classifier.FakeClassifier{},
+		claude:              &claude.FakeClient{},
+		skills:              skills.NewLoader("", false),
+		compactionThreshold: conf.CompactionThreshold,
+		historyLimit:        conf.HistoryLimit,
+		parentLogger:        logger.New(),
 	}
 	for _, opt := range opts {
 		opt(srv)
@@ -124,12 +130,12 @@ func (s *Server) Serve() error {
 	router.With(withTimeout).Get("/session", handleSession(s.agents))
 	router.With(withTimeout).Get("/history", handleHistory(s.chats))
 	// SSE must NOT have a request timeout
-	router.Get("/sse", handleSSE(s.broker))
+	router.Get("/sse", handleSSE(s.broker, sseActiveConns))
 	router.With(withTimeout).Post("/message", handleMessage(
-		s.agents, s.chats, s.broker, s.clf, s.claude, s.skills, s.inboxItems, s.jobStore,
+		s.agents, s.chats, s.broker, s.clf, s.claude, s.skills, s.inboxItems, s.jobStore, s.compactionThreshold, s.config.AsyncTimeout, s.historyLimit,
 	))
 	router.With(withTimeout).Post("/chat", handleChat(
-		s.agents, s.chats, s.claude, s.skills,
+		s.agents, s.chats, s.claude, s.skills, s.historyLimit,
 	))
 	router.With(withTimeout).Get("/inbox", handleInboxList(s.inboxItems))
 	router.With(withTimeout).Post("/inbox/{id}/answer", handleInboxAnswer(s.inboxItems))
@@ -164,15 +170,17 @@ func (s *Server) Serve() error {
 	}()
 
 	processor := &jobProcessor{
-		claude:     s.claude,
-		broker:     s.broker,
-		agents:     s.agents,
-		chats:      s.chats,
-		inboxItems: s.inboxItems,
-		skills:     s.skills,
-		jobStore:   s.jobStore,
-		clf:        s.clf,
-		logger:     s.parentLogger,
+		claude:              s.claude,
+		broker:              s.broker,
+		agents:              s.agents,
+		chats:               s.chats,
+		inboxItems:          s.inboxItems,
+		skills:              s.skills,
+		jobStore:            s.jobStore,
+		clf:                 s.clf,
+		logger:              s.parentLogger,
+		compactionThreshold: s.compactionThreshold,
+		historyLimit:        s.historyLimit,
 	}
 	runner := jobs.NewRunner(s.jobStore, processor, s.parentLogger, 15*time.Second)
 	s.mu.Lock()
@@ -229,6 +237,7 @@ func (s *Server) newRouter() *chi.Mux {
 	router.Use(middleware.RealIP)
 	router.Use(logger.Middleware(s.parentLogger, s.config.Debug))
 	router.Use(middleware.Recoverer)
+	router.Use(httpMetricsMiddleware)
 	return router
 }
 
@@ -255,6 +264,12 @@ func (s *Server) LastError() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.srvErr
+}
+
+// SubscriberCount returns the number of active SSE subscribers for agentID.
+// Exposed for tests to poll instead of sleeping.
+func (s *Server) SubscriberCount(agentID int64) int {
+	return s.broker.SubscriberCount(agentID)
 }
 
 func (s *Server) setLastError(err error) {
