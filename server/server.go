@@ -42,6 +42,8 @@ type Server struct {
 	skills               *skills.Loader
 	compactionThreshold int
 	historyLimit        int
+	fetchDenylist       []string
+	fetchContentLimit   int
 
 	mu                 sync.Mutex
 	started            bool
@@ -78,6 +80,8 @@ func New(conf Config) (*Server, error) {
 		skills:              skills.NewLoader(conf.SkillsDir, conf.Debug),
 		compactionThreshold: conf.CompactionThreshold,
 		historyLimit:        conf.HistoryLimit,
+		fetchDenylist:       conf.FetchDenylist,
+		fetchContentLimit:   conf.FetchContentLimit,
 		parentLogger:        rootLogger,
 	}, nil
 }
@@ -108,6 +112,8 @@ func NewTest(conf Config, opts ...Option) *Server {
 		skills:              skills.NewLoader("", false),
 		compactionThreshold: conf.CompactionThreshold,
 		historyLimit:        conf.HistoryLimit,
+		fetchDenylist:       conf.FetchDenylist,
+		fetchContentLimit:   conf.FetchContentLimit,
 		parentLogger:        logger.New(),
 	}
 	for _, opt := range opts {
@@ -181,6 +187,8 @@ func (s *Server) Serve() error {
 		logger:              s.parentLogger,
 		compactionThreshold: s.compactionThreshold,
 		historyLimit:        s.historyLimit,
+		fetchDenylist:       s.fetchDenylist,
+		fetchContentLimit:   s.fetchContentLimit,
 	}
 	runner := jobs.NewRunner(s.jobStore, processor, s.parentLogger, 15*time.Second)
 	s.mu.Lock()

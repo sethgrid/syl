@@ -17,13 +17,25 @@ func NewFakeStore() *FakeStore {
 	return &FakeStore{next: 1}
 }
 
-func (f *FakeStore) Add(question string) (*Item, error) {
+func (f *FakeStore) Add(question, category string) (*Item, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	it := Item{ID: f.next, Question: question, Status: "open", CreatedAt: time.Now()}
+	it := Item{ID: f.next, Question: question, Category: category, Status: "open", CreatedAt: time.Now()}
 	f.next++
 	f.items = append(f.items, it)
 	return &it, nil
+}
+
+func (f *FakeStore) ListByCategory(category string) ([]Item, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []Item
+	for _, it := range f.items {
+		if it.Category == category {
+			out = append(out, it)
+		}
+	}
+	return out, nil
 }
 
 func (f *FakeStore) List() ([]Item, error) {

@@ -34,6 +34,7 @@ func migrate(db *sql.DB) error {
 		return err
 	}
 	_, _ = db.Exec(`ALTER TABLE jobs ADD COLUMN recurrence TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE inbox_items ADD COLUMN category TEXT NOT NULL DEFAULT ''`)
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS agents_name_unique ON agents (name) WHERE name IS NOT NULL`); err != nil {
 		return fmt.Errorf("agents_name_unique index: %w", err)
 	}

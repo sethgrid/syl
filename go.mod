@@ -1,6 +1,6 @@
 module github.com/sethgrid/syl
 
-go 1.24
+go 1.25.0
 
 require (
 	github.com/anthropics/anthropic-sdk-go v0.2.0-alpha.8
@@ -33,7 +33,8 @@ require (
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
 	golang.org/x/exp v0.0.0-20230315142452-642cacee5cc0 // indirect
-	golang.org/x/sys v0.28.0 // indirect
+	golang.org/x/net v0.52.0 // indirect
+	golang.org/x/sys v0.42.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	modernc.org/libc v1.61.13 // indirect
