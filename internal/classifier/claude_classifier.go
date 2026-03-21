@@ -29,6 +29,8 @@ RESPONSE TYPES — pick exactly one:
 - "inbox_read"         — user wants to see their inbox
 - "job_list"           — user wants to see pending/scheduled tasks
 - "job_cancel"         — user wants to cancel a specific scheduled task
+- "feature_requests"   — user wants to see open feature requests / capability gaps
+- "url_fetch"          — user wants to fetch, read, or summarize a URL or web page
 
 CRITICAL RULE: If the user mentions ANY delay or future time — "in 40 seconds", "in 5 minutes", "tomorrow at 9", "remind me at 3pm", "after lunch", "in a bit" — you MUST use "scheduled_once" or "scheduled_recurring". NEVER "immediate". You cannot refuse or explain; just route.
 
@@ -51,6 +53,15 @@ For scheduled types, populate "jobs" with one entry per task:
 
 For "job_cancel", set "cancel_job_id" to the integer job ID the user mentioned.
 
+For "url_fetch", populate "jobs" with one entry:
+{
+  "type": "url_fetch",
+  "payload": {"url": "<full URL to fetch>", "question": "<what the user wants to know>"},
+  "run_at": "",
+  "recurrence": ""
+}
+If the user refers to a well-known resource without an explicit URL (e.g. "the Wikipedia entry for Google"), construct the canonical URL (e.g. "https://en.wikipedia.org/wiki/Google"). Always use https:// when constructing URLs.
+
 EXAMPLES:
 
 User: "tell me in 40 seconds what 2+2 is"
@@ -66,7 +77,19 @@ User: "cancel task 7"
 → {"response_type":"job_cancel","soul_update":null,"relevant_skill_names":[],"jobs":[],"cancel_job_id":7}
 
 User: "what is the capital of France?"
-→ {"response_type":"immediate","soul_update":null,"relevant_skill_names":[],"jobs":[],"cancel_job_id":null}`
+→ {"response_type":"immediate","soul_update":null,"relevant_skill_names":[],"jobs":[],"cancel_job_id":null}
+
+User: "show me open feature requests"
+→ {"response_type":"feature_requests","soul_update":null,"relevant_skill_names":[],"jobs":[],"cancel_job_id":null}
+
+User: "can you grab the wikipedia entry for Google and tell me what the first link points to?"
+→ {"response_type":"url_fetch","soul_update":null,"relevant_skill_names":[],"jobs":[{"type":"url_fetch","payload":{"url":"https://en.wikipedia.org/wiki/Google","question":"What does the first link in the article point to?"},"run_at":"","recurrence":""}],"cancel_job_id":null}
+
+User: "summarize https://example.com/article"
+→ {"response_type":"url_fetch","soul_update":null,"relevant_skill_names":[],"jobs":[{"type":"url_fetch","payload":{"url":"https://example.com/article","question":"Summarize this page."},"run_at":"","recurrence":""}],"cancel_job_id":null}
+
+User: "what capabilities are you missing?"
+→ {"response_type":"feature_requests","soul_update":null,"relevant_skill_names":[],"jobs":[],"cancel_job_id":null}`
 
 func (c *ClaudeClassifier) Classify(ctx context.Context, _ string, _ []string, skillNames []string, userMessage string) (*Result, error) {
 	now := c.nowFunc().UTC()

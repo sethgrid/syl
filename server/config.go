@@ -17,4 +17,6 @@ type Config struct {
 	ShutdownTimeout      time.Duration `env:"SYL_SHUTDOWN_TIMEOUT"      envDefault:"30s"`
 	CompactionThreshold  int           `env:"SYL_COMPACTION_THRESHOLD"  envDefault:"50"`
 	HistoryLimit         int           `env:"SYL_HISTORY_LIMIT"         envDefault:"20"`
+	FetchDenylist        []string      `env:"SYL_FETCH_DENYLIST"        envSeparator:","`
+	FetchContentLimit    int           `env:"SYL_FETCH_CONTENT_LIMIT"   envDefault:"4000"`
 }

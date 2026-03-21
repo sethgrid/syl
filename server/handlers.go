@@ -253,6 +253,11 @@ func handleMessage(
 				publish(sse.Event{Type: "done"})
 				assistantResponse = sb.String()
 
+			case "url_fetch":
+				publish(sse.Event{Type: "token", Content: "On it — fetching that for you now."})
+				publish(sse.Event{Type: "done"})
+				assistantResponse = "On it — fetching that for you now."
+
 			case "scheduled", "scheduled_once", "scheduled_recurring":
 				msg := buildScheduleConfirmation(result.Jobs)
 				publish(sse.Event{Type: "token", Content: msg})
@@ -278,6 +283,26 @@ func handleMessage(
 						} else {
 							fmt.Fprintf(&sb, "%d. [#%d] %s — due in ~%s\n", i+1, j.ID, jobPromptPreview(j), due)
 						}
+					}
+				}
+				publish(sse.Event{Type: "token", Content: sb.String()})
+				publish(sse.Event{Type: "done"})
+				assistantResponse = sb.String()
+
+			case "feature_requests":
+				items, err := inbx.ListByCategory("feature_request")
+				if err != nil {
+					log.Error("list feature requests", "error", err)
+					publish(sse.Event{Type: "error", Content: "could not read feature requests"})
+					return
+				}
+				var sb strings.Builder
+				if len(items) == 0 {
+					sb.WriteString("No open feature requests.")
+				} else {
+					fmt.Fprintf(&sb, "You have %d open feature request(s):\n\n", len(items))
+					for i, it := range items {
+						fmt.Fprintf(&sb, "%d. %s\n", i+1, it.Question)
 					}
 				}
 				publish(sse.Event{Type: "token", Content: sb.String()})
@@ -321,6 +346,22 @@ func handleMessage(
 				persistAssistant(assistantResponse)
 				if compactionThreshold > 0 {
 					maybeCompact(ctx, log, chats, cl, ag.ID, agentDisplayName(ag), compactionThreshold)
+				}
+
+				// Capability-gap detection: if the response indicates a missing capability,
+				// file a feature_request inbox item and notify the user via SSE.
+				if detectCapabilityGap(assistantResponse) {
+					description := fmt.Sprintf("User asked: %q\n\nSyl responded: %q", req.Text, truncateGapSnippet(assistantResponse))
+					if _, err := jobStore.Enqueue(ag.ID, "inbox_write", map[string]string{
+						"question": description,
+						"category": "feature_request",
+					}, time.Now(), ""); err != nil {
+						log.Error("enqueue feature request", "error", err)
+					} else {
+						notice := "It looks like I wasn't able to help with that. I've filed a feature request so we can look into adding that capability."
+						publish(sse.Event{Type: "token", Content: notice})
+						publish(sse.Event{Type: "done"})
+					}
 				}
 			}
 		}()
@@ -616,6 +657,48 @@ func handlePutSoul(agents agent.Store) http.HandlerFunc {
 	}
 }
 
+// capabilityGapPhrases are patterns that indicate Claude lacks a capability the user asked for.
+var capabilityGapPhrases = []string{
+	"i don't have access",
+	"i do not have access",
+	"i can't access",
+	"i cannot access",
+	"i'm unable to",
+	"i am unable to",
+	"i don't have the ability",
+	"i do not have the ability",
+	"i lack the ability",
+	"i don't have real-time",
+	"i don't have information about your",
+	"i can't retrieve",
+	"i cannot retrieve",
+	"i can't look up",
+	"i cannot look up",
+	"i can't check",
+	"i cannot check",
+}
+
+// truncateGapSnippet returns the first 200 runes of a response for use in gap descriptions.
+func truncateGapSnippet(s string) string {
+	runes := []rune(s)
+	if len(runes) <= 200 {
+		return s
+	}
+	return string(runes[:200]) + "…"
+}
+
+// detectCapabilityGap returns true if the response contains a refusal pattern
+// suggesting the assistant lacks a capability the user asked for.
+func detectCapabilityGap(response string) bool {
+	lower := strings.ToLower(response)
+	for _, phrase := range capabilityGapPhrases {
+		if strings.Contains(lower, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
 // compactionSystemPrompt and compactionUserPromptTmpl control the summarization
 // call made by maybeCompact. Kept as constants so they're easy to find and tune.
 const (
@@ -636,6 +719,8 @@ type jobProcessor struct {
 	logger              *slog.Logger
 	compactionThreshold int
 	historyLimit        int
+	fetchDenylist       []string
+	fetchContentLimit   int
 }
 
 func (p *jobProcessor) Process(job *jobs.Job) error {
@@ -649,6 +734,8 @@ func (p *jobProcessor) Process(job *jobs.Job) error {
 		return p.processSkillWrite(job)
 	case "soul_update":
 		return p.processSoulUpdate(job)
+	case "url_fetch":
+		return p.processURLFetch(job)
 	default:
 		p.logger.Warn("unknown job type — skipping", "job_id", job.ID, "job_type", job.JobType)
 		return nil
@@ -737,11 +824,12 @@ func (p *jobProcessor) processSendMessage(job *jobs.Job) error {
 func (p *jobProcessor) processInboxWrite(job *jobs.Job) error {
 	var payload struct {
 		Question string `json:"question"`
+		Category string `json:"category"`
 	}
 	if err := json.Unmarshal(job.Payload, &payload); err != nil {
 		return fmt.Errorf("decode payload: %w", err)
 	}
-	if _, err := p.inboxItems.Add(payload.Question); err != nil {
+	if _, err := p.inboxItems.Add(payload.Question, payload.Category); err != nil {
 		return fmt.Errorf("add inbox item: %w", err)
 	}
 	msg := fmt.Sprintf("I've added a question to your inbox: %q", payload.Question)
